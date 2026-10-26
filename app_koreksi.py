@@ -6,10 +6,10 @@ import json
 import re
 import os
 import time
+import io
 
 st.set_page_config(page_title="Koreksi Ujian AI - SMPN 4 Tamban", layout="wide")
 
-# Fungsi muat API Key (Prioritas dari Streamlit Cloud Secrets agar permanen di HP)
 KEY_FILE = "api_key_saved.txt"
 def load_key():
     try:
@@ -29,22 +29,57 @@ def save_key(k):
     except Exception:
         pass
 
-# Kompresi dengan memperbaiki orientasi kamera HP & ketajaman tinggi (1600px)
-def prepare_image(img, rotasi=0, max_size=1600):
+# Kompresi super ringan (<80 KB) agar cepat terkirim meski sinyal HP lambat
+def prepare_image(img, rotasi=0, max_size=1100):
     img_fixed = ImageOps.exif_transpose(img).copy()
     if img_fixed.mode in ("RGBA", "P"):
         img_fixed = img_fixed.convert("RGB")
     if rotasi != 0:
         img_fixed = img_fixed.rotate(-rotasi, expand=True)
     img_fixed.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-    return img_fixed
+    
+    # Kompresi ke buffer JPEG kualitas 80% agar ukuran byte sangat kecil tapi teks tajam
+    buf = io.BytesIO()
+    img_fixed.save(buf, format="JPEG", quality=80, optimize=True)
+    buf.seek(0)
+    return Image.open(buf)
 
-# Fungsi ekstrak kunci PG dari teks gabungan guru (Contoh: "1.A 2.B" -> {"1": "A", "2": "B"})
 def parse_kunci_pg(teks):
     pairs = re.findall(r'\b(\d+)\s*[\.\:\-\)]\s*([A-Ea-e])\b', teks)
     return {str(num): ans.upper() for num, ans in pairs}
 
-st.title("📝 Aplikasi Koreksi Ujian AI")
+# FUNGSI ANTI-LIMIT (OTOMATIS GANTI MODEL JIKA KUOTA PENUH & TANPA LOADING LAMA)
+def generate_with_fallback(prompt_parts, model_utama):
+    daftar_model = [model_utama, "gemini-2.0-flash", "gemini-3.8-flash-lite", "gemini-3.8-flash", "gemini-3.8-pro"]
+    # Hapus duplikat dengan menjaga urutan
+    urutan_model = list(dict.fromkeys(daftar_model))
+    
+    generation_config = {
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": 1,
+        "response_mime_type": "application/json"
+    }
+    
+    last_error = None
+    for m_name in urutan_model:
+        try:
+            model = genai.GenerativeModel(m_name, generation_config=generation_config)
+            # Timeout 25 detik agar tidak pernah nyangkut sampai 3-4 menit
+            response = model.generate_content(prompt_parts, request_options={"timeout": 25})
+            return response, m_name
+        except Exception as e:
+            err_str = str(e)
+            last_error = err_str
+            # Jika kena limit 429, timeout, atau model tidak tersedia, langsung loncat ke model berikutnya
+            if "429" in err_str or "Quota" in err_str or "404" in err_str or "Deadline" in err_str or "503" in err_str:
+                time.sleep(1)
+                continue
+            else:
+                continue
+    raise Exception(f"Semua jalur model sedang sibuk. Silakan tunggu 30 detik lalu coba lagi. Detail: {last_error}")
+
+st.title("📝 Aplikasi Koreksi Ujian AI (Anti-Limit ⚡)")
 st.caption("SMPN 4 Tamban - Koreksi Otomatis PG & Essay")
 st.markdown("---")
 
@@ -54,11 +89,11 @@ with st.sidebar:
     api_key = st.text_input("Google Gemini API Key:", value=saved_api, type="password")
     if api_key and api_key != saved_api:
         save_key(api_key)
-        st.success("✅ API Key tersimpan untuk sesi ini!")
+        st.success("✅ API Key aktif!")
     
     pilihan_model = st.selectbox(
-        "Model AI:", 
-        ["gemini-3.8-flash", "gemini-3.8-pro", "gemini-2.0-flash"], 
+        "Model AI Utama (Otomatis pindah ke cadangan jika limit):", 
+        ["gemini-2.0-flash", "gemini-3.8-flash", "gemini-3.8-pro"], 
         index=0
     )
     
@@ -79,7 +114,7 @@ tab1, tab2, tab3 = st.tabs([
     "3️⃣ Rekap & Setujui"
 ])
 
-# TAB 1: ACUAN GURU DIGABUNG JADI SATU (SEKALI UPLOAD / KETIK SAJA)
+# TAB 1: ACUAN GURU
 with tab1:
     st.subheader("📸 1. Upload / Ketik Acuan Penilaian (PG & Essay Jadi Satu)")
     st.info("💡 Cukup **sekali upload** foto kertas yang berisi Kunci PG sekaligus Soal & Jawaban Essay, atau ketik langsung di bawah.")
@@ -99,11 +134,10 @@ with tab1:
             key="rot_acuan"
         )
         st.session_state.acuan_guru_img = prepare_image(Image.open(foto_acuan), rotasi=rotasi_acuan)
-        # Tampilan besar penuh selebar layar HP
         st.image(st.session_state.acuan_guru_img, caption="Foto Acuan Guru (PG & Essay)", use_container_width=True)
 
     input_acuan_teks = st.text_area(
-        "✍️ Atau Ketik / Copy-Paste Kunci PG & Essay Sekaligus di Sini (Opsional):", 
+        "✍️ Atau Ketik / Copy-Paste Kunci PG & Essay Sekaligus di Sini (Sangat Cepat & Hemat Kuota):", 
         value=st.session_state.acuan_guru_teks,
         placeholder="Contoh:\nKUNCI PG:\n1.B 2.B 3.D 4.B 5.A\n\nKUNCI ESSAY:\n1a. 12 + 25 - 10 = 27\n1b. 2 x 3 : 6 = 1",
         height=180
@@ -113,7 +147,7 @@ with tab1:
         st.session_state.acuan_guru_teks = input_acuan_teks
         st.success("✅ Acuan penilaian berhasil disimpan! Silakan pindah ke Tab 2.")
 
-# TAB 2: JAWABAN SISWA (TANPA KAMERA WEB KECIL, LANGSUNG KAMERA HP FULL / GALERI & PREVIEW BESAR)
+# TAB 2: JAWABAN SISWA
 with tab2:
     st.subheader("📱 2. Foto & Upload Lembar Jawaban Siswa")
     
@@ -123,7 +157,7 @@ with tab2:
     with c2:
         kelas_siswa = st.text_input("Kelas / Mapel:", value="Kelas 7 - Matematika")
 
-    st.caption("Klik tombol di bawah, lalu pilih **Kamera** (tampilan kamera HP penuh/besar) atau pilih dari **Galeri**:")
+    st.caption("Klik tombol di bawah, lalu pilih **Kamera** atau pilih dari **Galeri**:")
     file_siswa = st.file_uploader(
         "📸 Buka Kamera HP / Pilih Foto dari Galeri:", 
         type=["jpg", "jpeg", "png"], 
@@ -141,12 +175,10 @@ with tab2:
             key="rot_siswa"
         )
         
-        img_siswa = prepare_image(raw_img, rotasi=rotasi, max_size=1600)
-        
-        # TAMPILAN PREVIEW BESAR MEMENUHI LAYAR HP
+        img_siswa = prepare_image(raw_img, rotasi=rotasi, max_size=1100)
         st.image(img_siswa, caption="Preview Lembar Jawaban Siswa", use_container_width=True)
         
-        if st.button("🎯 Proses Koreksi Akurat (AI)", type="primary", use_container_width=True):
+        if st.button("🎯 Proses Koreksi Cepat & Akurat (AI)", type="primary", use_container_width=True):
             teks_acuan_final = input_acuan_teks if input_acuan_teks else st.session_state.acuan_guru_teks
 
             if not api_key:
@@ -155,30 +187,23 @@ with tab2:
                 st.error("⚠️ Mohon upload foto atau ketik acuan guru di Tab 1 terlebih dahulu!")
             else:
                 waktu_mulai = time.time()
-                with st.spinner("🔍 AI sedang mengoreksi jawaban PG & Essay siswa..."):
+                with st.spinner("⚡ Mengoreksi jawaban siswa (Otomatis mencari jalur server tercepat)..."):
                     try:
                         genai.configure(api_key=api_key)
-                        generation_config = {
-                            "temperature": 0.0,
-                            "top_p": 1.0,
-                            "top_k": 1,
-                            "response_mime_type": "application/json"
-                        }
-                        model = genai.GenerativeModel(pilihan_model, generation_config=generation_config)
                         
                         prompt_parts = [
                             f"""Anda adalah sistem OCR dan korektor ujian tingkat presisi tinggi.
                             
                             ATURAN KETAT MEMBACA TABEL PILIHAN GANDA (PG):
-                            1. Baca setiap baris nomor dengan teliti (Perhatikan kolom nomornya).
+                            1. Baca setiap baris nomor dengan teliti.
                             2. ATURAN CORETAN / GANTI JAWABAN: Jika pada satu nomor terdapat tanda silang (X) yang DICORET dengan garis mendatar/tebal (seperti tanda '=' di atas X) dan ada tanda silang (X) lain yang bersih di sebelahnya, maka tanda yang dicoret itu BATAL. Pilihlah huruf yang memiliki tanda silang (X) BERSIH sebagai jawaban sah siswa (BUKAN jawaban ganda).
                             3. Abaikan nomor yang dibiarkan kosong semua.
                             
                             Tugas Anda:
                             - Baca Nama Siswa yang tertulis di lembar jawaban.
-                            - Dari ACUAN GURU (foto maupun teks), ekstrak kunci jawaban PG ke dalam "kunci_pg_guru" (contoh: {{"1": "B", "2": "B"}}).
+                            - Dari ACUAN GURU, ekstrak kunci jawaban PG ke dalam "kunci_pg_guru" (contoh: {{"1": "B", "2": "B"}}).
                             - Dari LEMBAR JAWABAN SISWA, ekstrak huruf jawaban PG siswa yang terisi pada setiap nomor ke dalam "jawaban_pg_siswa" (contoh: {{"1": "B", "2": "B"}}).
-                            - Periksa jawaban Essay siswa dibandingkan dengan Soal & Jawaban Essay pada ACUAN GURU, lalu berikan "skor_essay" (skala 0-100) dan "detail_essay".
+                            - Periksa jawaban Essay siswa dibandingkan dengan Acuan Essay Guru, lalu berikan "skor_essay" (skala 0-100) dan "detail_essay".
                             
                             Kembalikan HANYA format JSON berikut:
                             {{
@@ -191,15 +216,16 @@ with tab2:
                         ]
                         
                         if st.session_state.acuan_guru_img:
-                            prompt_parts.append("FOTO ACUAN GURU (MEMUAT KUNCI PG DAN SOAL/JAWABAN ESSAY):")
+                            prompt_parts.append("FOTO ACUAN GURU:")
                             prompt_parts.append(st.session_state.acuan_guru_img)
                         if teks_acuan_final:
-                            prompt_parts.append(f"TEKS ACUAN GURU (PG & ESSAY): {teks_acuan_final}")
+                            prompt_parts.append(f"TEKS ACUAN GURU: {teks_acuan_final}")
 
                         prompt_parts.append("FOTO LEMBAR JAWABAN SISWA:")
                         prompt_parts.append(img_siswa)
 
-                        response = model.generate_content(prompt_parts)
+                        # Panggil fungsi Anti-Limit dengan Auto-Fallback
+                        response, model_terpakai = generate_with_fallback(prompt_parts, pilihan_model)
                         cleaned_text = re.sub(r"```json|```", "", response.text).strip()
                         hasil_json = json.loads(cleaned_text)
                         
@@ -249,7 +275,7 @@ with tab2:
                             "Status": "⏳ Sementara (Perlu Review)"
                         })
                         
-                        st.success(f"✅ Koreksi selesai dalam **{durasi} detik**! Nama: **{nama_final}**")
+                        st.success(f"✅ Selesai dalam **{durasi} detik** (Menggunakan jalur: `{model_terpakai}`)! Nama: **{nama_final}**")
                         col_r1, col_r2, col_r3 = st.columns(3)
                         col_r1.metric("Skor PG", skor_pg)
                         col_r2.metric("Skor Essay", skor_essay)
@@ -258,7 +284,7 @@ with tab2:
                         st.info(f"**Rincian PG:** {rincian_pg_teks}\n\n**Per Nomor:** {', '.join(detail_per_nomor)}\n\n**Catatan Essay:** {hasil_json.get('detail_essay', '')}")
                         
                     except Exception as e:
-                        st.error(f"Gagal memproses dengan AI: {e}")
+                        st.error(f"Gagal memproses: {e}")
 
 # TAB 3: REVIEW GURU
 with tab3:
