@@ -23,7 +23,7 @@ def load_key():
             return f.read().strip()
     return ""
 
-# Kompresi gambar & ubah ke Base64 agar pengiriman stabil 100% seperti sistem web Laravel
+# Kompresi gambar & ubah ke Base64 agar pengiriman stabil & cepat
 def prepare_image_and_b64(img, rotasi=0, max_size=1024):
     img_fixed = ImageOps.exif_transpose(img).copy()
     if img_fixed.mode in ("RGBA", "P"):
@@ -43,9 +43,8 @@ def parse_kunci_pg(teks):
     pairs = re.findall(r'\b(\d+)\s*[\.\:\-\)]\s*([A-Ea-e])\b', teks)
     return {str(num): ans.upper() for num, ans in pairs}
 
-# FUNGSI JALUR LANGSUNG HTTP (TIDAK AKAN MACET 3-4 MENIT)
+# FUNGSI JALUR LANGSUNG HTTP
 def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa, provider):
-    # 1. JIKA MENGGUNAKAN GROQ (SUPER CEPAT 2 DETIK & KUOTA LONGGAR)
     if provider == "Groq Vision (Super Cepat 2 Detik)" or api_key.startswith("gsk_"):
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -59,7 +58,7 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa, provider):
         payload = {
             "model": "meta-llama/llama-4-scout-17b-16e-instruct",
             "messages": [{"role": "user", "content": content_list}],
-            "temperature": 0.0,
+            "temperature": 0.1,
             "response_format": {"type": "json_object"}
         }
         res = requests.post(url, headers=headers, json=payload, timeout=25)
@@ -68,8 +67,6 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa, provider):
         else:
             raise Exception(f"Groq Error ({res.status_code}): {res.text}")
 
-    # 2. JIKA MENGGUNAKAN GOOGLE GEMINI (JALUR REST API LANGSUNG TANPA LIBRARY YANG SERING MACET)
-    # Otomatis cek daftar model yang diizinkan oleh API Key Anda
     list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
     res_list = requests.get(list_url, timeout=10)
     model_tersedia = []
@@ -80,7 +77,6 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa, provider):
             if "generateContent" in methods and ("flash" in name or "pro" in name) and "vision" not in name:
                 model_tersedia.append(name)
     
-    # Urutkan prioritas ke model flash-lite / flash yang paling hemat kuota
     prioritas = [m for m in model_tersedia if "lite" in m] + [m for m in model_tersedia if "flash" in m and "lite" not in m] + model_tersedia
     urutan_model = list(dict.fromkeys(prioritas)) if prioritas else ["gemini-3.8-flash", "gemini-2.0-flash"]
 
@@ -94,7 +90,7 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa, provider):
     payload = {
         "contents": [{"parts": parts}],
         "generationConfig": {
-            "temperature": 0.0,
+            "temperature": 0.1,
             "responseMimeType": "application/json"
         }
     }
@@ -110,11 +106,11 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa, provider):
         else:
             detail_err = f"[{m_name}: Kode {res.status_code}]"
             if res.status_code == 429:
-                continue # Langsung loncat ke model lain dalam 0.5 detik jika kena limit
-    raise Exception(f"Kuota Google Gemini Anda sedang dibatasi oleh Google ({detail_err}). Solusi: Tunggu 1 menit, atau gunakan API Key Groq yang bebas macet.")
+                continue
+    raise Exception(f"Kuota Google Gemini sedang penuh ({detail_err}). Silakan tunggu sebentar atau gunakan Groq.")
 
-st.title("📝 Aplikasi Koreksi Ujian AI (Jalur Stabil 🚀)")
-st.caption("SMPN 4 Tamban - Koreksi Otomatis PG & Essay")
+st.title("📝 Aplikasi Koreksi Ujian AI (Penilaian Cerdas 🧠)")
+st.caption("SMPN 4 Tamban - Koreksi Otomatis PG & Essay Kontekstual")
 st.markdown("---")
 
 with st.sidebar:
@@ -127,8 +123,16 @@ with st.sidebar:
     saved_api = load_key()
     api_key = st.text_input("Masukkan API Key:", value=saved_api, type="password")
     
-    if provider_ai == "Groq Vision (Super Cepat 2 Detik)":
-        st.info("💡 **Cara dapat API Key Groq Gratis (Tanpa Limit Ketat):** Buka **console.groq.com** -> Login Google -> Klik **API Keys** -> **Create API Key** (Kode diawali `gsk_...`).")
+    st.markdown("---")
+    st.subheader("🧠 Gaya Koreksi Essay")
+    mode_essay = st.radio(
+        "Cara AI Menilai Essay:",
+        [
+            "Fleksibel & Kontekstual (Menilai makna, cara alternatif, & skor langkah)",
+            "Ketat (Harus sama persis dengan kunci guru)"
+        ],
+        index=0
+    )
     
     st.markdown("---")
     bobot_pg = st.number_input("Bobot Total Nilai PG (%):", min_value=0, max_value=100, value=60)
@@ -152,17 +156,17 @@ tab1, tab2, tab3 = st.tabs([
 # TAB 1: ACUAN GURU
 with tab1:
     st.subheader("📸 1. Upload / Ketik Acuan Penilaian (PG & Essay Jadi Satu)")
-    st.info("💡 **Tips Paling Stabil & Cepat:** Ketik/Copy-Paste kunci PG dan Essay di kotak bawah ini agar tidak perlu mengirim banyak foto.")
+    st.info("💡 Untuk Essay, Anda cukup memasukkan **Soal dan Jawaban Acuan** (atau soalnya saja). AI akan otomatis menyesuaikan dan menilai kebenaran logika/makna jawaban siswa.")
     
     input_acuan_teks = st.text_area(
-        "✍️ Ketik / Copy-Paste Kunci PG & Essay Sekaligus di Sini:", 
+        "✍️ Ketik / Copy-Paste Kunci PG & Soal/Jawaban Essay di Sini:", 
         value=st.session_state.acuan_guru_teks,
-        placeholder="Contoh:\nKUNCI PG:\n1.B 2.B 3.D 4.B 5.A 6.A 7.C 8.A 9.B 10.C 11.C 12.B 13.C 14.A 15.A\n\nKUNCI ESSAY:\n1a. 12 + 25 - 10 = 27\n1b. 2 x 3 : 6 = 1\n2a. 24/2 = 12\n2b. 1/3 + 2/3 = 1",
+        placeholder="Contoh:\nKUNCI PG:\n1.B 2.B 3.D 4.B 5.A\n\nSOAL & ACUAN ESSAY:\n1. Apa yang dimaksud dengan hipotenusa?\nAcuan: Sisi miring pada segitiga siku-siku (jawaban dengan kalimat lain yang semakna tetap benar).\n2. Hitung 12 + 25 - 10!\nAcuan: 27",
         height=180
     )
 
     foto_acuan = st.file_uploader(
-        "📷 Atau Ambil Foto Acuan Guru (Opsional jika sudah diketik di atas):", 
+        "📷 Atau Ambil Foto Lembar Soal & Kunci Guru:", 
         type=["jpg", "jpeg", "png"], 
         key="up_acuan_gabungan"
     )
@@ -210,9 +214,19 @@ with tab2:
                 st.error("⚠️ Mohon ketik atau foto acuan guru di Tab 1 terlebih dahulu!")
             else:
                 waktu_mulai = time.time()
-                with st.spinner("⚡ Menghubungi server AI via jalur langsung..."):
+                with st.spinner("🧠 AI sedang membaca dan menalar jawaban siswa..."):
                     try:
-                        prompt_text = f"""Anda adalah sistem OCR dan korektor ujian tingkat presisi tinggi.
+                        if "Fleksibel" in mode_essay:
+                            instruksi_essay = """ATURAN PENILAIAN ESSAY (FLEKSIBEL, KONTEKSTUAL & BIJAKSANA):
+                            1. Jangan menilai secara kaku kata-per-kata! Kunci jawaban guru hanyalah acuan dasar.
+                            2. Pemahaman Konsep / Bahasa: Jika siswa menjawab dengan kalimat atau kata-katanya sendiri namun secara substansi, konsep, atau logika BENAR dan sesuai dengan pertanyaan soal, berikan SKOR PENUH pada nomor tersebut.
+                            3. Penyelesaian Matematika / Hitungan: Jika siswa menggunakan cara/metode berbeda yang valid secara matematis dan hasilnya benar, berikan SKOR PENUH.
+                            4. Nilai Proses (Partial Credit): Jika langkah/cara pengerjaan siswa sudah benar namun ada sedikit kekeliruan di hasil akhir (atau jawaban mendekati tepat), tetap berikan SKOR SEBAGIAN secara proporsional (misal 50%-80% untuk nomor tersebut) dan jelaskan alasannya di detail_essay."""
+                        else:
+                            instruksi_essay = """ATURAN PENILAIAN ESSAY (KETAT):
+                            Nilai jawaban essay siswa harus mengacu ketat pada kesamaan hasil akhir dengan kunci jawaban guru."""
+
+                        prompt_text = f"""Anda adalah guru pengoreksi ujian yang cerdas, objektif, dan bijaksana.
                         ACUAN GURU (TEKS):
                         {teks_acuan_final}
                         
@@ -221,13 +235,15 @@ with tab2:
                         2. Jika ada tanda silang (X) yang dicoret tebal/garis datar dan ada tanda silang (X) lain yang bersih di baris yang sama, maka yang dicoret itu BATAL. Ambil tanda silang (X) yang bersih.
                         3. Abaikan nomor yang kosong.
                         
+                        {instruksi_essay}
+                        
                         Kembalikan HANYA JSON valid dengan struktur persis seperti ini:
                         {{
                             "nama_terbaca": "Nama Siswa di Kertas",
                             "jawaban_pg_siswa": {{"1": "B", "2": "B"}},
                             "kunci_pg_guru": {{"1": "B", "2": "B"}},
-                            "skor_essay": 100,
-                            "detail_essay": "Penjelasan singkat koreksi tiap nomor essay"
+                            "skor_essay": 90,
+                            "detail_essay": "Penjelasan penilaian tiap nomor essay (sebutkan jika jawaban siswa dinilai benar karena maknanya sesuai soal atau mendapat poin langkah pengerjaan)"
                         }}"""
 
                         res_text, model_terpakai = panggil_ai_stabil(
@@ -293,7 +309,7 @@ with tab2:
                         col_r2.metric("Skor Essay", skor_essay)
                         col_r3.metric("Nilai Akhir", nilai_akhir)
                         
-                        st.info(f"**Rincian PG:** {rincian_pg_teks}\n\n**Per Nomor:** {', '.join(detail_per_nomor)}\n\n**Catatan Essay:** {hasil_json.get('detail_essay', '')}")
+                        st.info(f"**Rincian PG:** {rincian_pg_teks}\n\n**Per Nomor:** {', '.join(detail_per_nomor)}\n\n**Catatan Essay (Penalaran AI):** {hasil_json.get('detail_essay', '')}")
                         
                     except Exception as e:
                         st.error(f"⚠️ {e}")
