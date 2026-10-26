@@ -109,8 +109,8 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa, provider):
                 continue
     raise Exception(f"Kuota Google Gemini sedang penuh ({detail_err}). Silakan tunggu sebentar atau gunakan Groq.")
 
-st.title("📝 Aplikasi Koreksi Ujian AI (Penilaian Cerdas 🧠)")
-st.caption("SMPN 4 Tamban - Koreksi Otomatis PG & Essay Kontekstual")
+st.title("📝 Aplikasi Koreksi Ujian AI (Sistem Poin Langsung 🎯)")
+st.caption("SMPN 4 Tamban - Koreksi Otomatis PG & Essay")
 st.markdown("---")
 
 with st.sidebar:
@@ -124,6 +124,19 @@ with st.sidebar:
     api_key = st.text_input("Masukkan API Key:", value=saved_api, type="password")
     
     st.markdown("---")
+    st.subheader("📊 Pengaturan Poin & Bobot")
+    bobot_pg = st.number_input("Total Poin Maksimal PG:", min_value=0, max_value=100, value=60, help="Contoh: 60 poin. Jika ada 15 soal PG, maka 1 soal otomatis bernilai 4 poin.")
+    bobot_essay = st.number_input("Total Poin Maksimal Essay:", min_value=0, max_value=100, value=40, help="Contoh: 40 poin. Jika ada 2 soal (masing-masing 2 anak soal = 4 butir), maka tiap anak soal bernilai 10 poin (1 soal utuh = 20 poin).")
+    
+    jml_butir_essay = st.number_input(
+        "Jumlah Total Butir / Anak Soal Essay:", 
+        min_value=1, max_value=50, value=4,
+        help="Isi total anak soal essay. Contoh: 2 soal essay yang masing-masing punya anak soal a dan b berarti totalnya 4 butir (masing-masing bernilai 10 poin)."
+    )
+    poin_per_butir_essay = round(bobot_essay / jml_butir_essay, 2)
+    st.caption(f"ℹ️ **Info Essay:** Dengan {jml_butir_essay} butir anak soal, maka setiap 1 anak soal benar mendapat **{poin_per_butir_essay} poin** (Total Maks: **{bobot_essay} poin**).")
+
+    st.markdown("---")
     st.subheader("🧠 Gaya Koreksi Essay")
     mode_essay = st.radio(
         "Cara AI Menilai Essay:",
@@ -133,10 +146,6 @@ with st.sidebar:
         ],
         index=0
     )
-    
-    st.markdown("---")
-    bobot_pg = st.number_input("Bobot Total Nilai PG (%):", min_value=0, max_value=100, value=60)
-    bobot_essay = st.number_input("Bobot Total Nilai Essay (%):", min_value=0, max_value=100, value=40)
 
 if "acuan_guru_img" not in st.session_state:
     st.session_state.acuan_guru_img = None
@@ -156,12 +165,12 @@ tab1, tab2, tab3 = st.tabs([
 # TAB 1: ACUAN GURU
 with tab1:
     st.subheader("📸 1. Upload / Ketik Acuan Penilaian (PG & Essay Jadi Satu)")
-    st.info("💡 Untuk Essay, Anda cukup memasukkan **Soal dan Jawaban Acuan** (atau soalnya saja). AI akan otomatis menyesuaikan dan menilai kebenaran logika/makna jawaban siswa.")
+    st.info("💡 Ketik atau foto Kunci PG beserta Soal/Jawaban Essay Anda. Poin per nomor akan dihitung otomatis sesuai bobot di sebelah kiri.")
     
     input_acuan_teks = st.text_area(
         "✍️ Ketik / Copy-Paste Kunci PG & Soal/Jawaban Essay di Sini:", 
         value=st.session_state.acuan_guru_teks,
-        placeholder="Contoh:\nKUNCI PG:\n1.B 2.B 3.D 4.B 5.A\n\nSOAL & ACUAN ESSAY:\n1. Apa yang dimaksud dengan hipotenusa?\nAcuan: Sisi miring pada segitiga siku-siku (jawaban dengan kalimat lain yang semakna tetap benar).\n2. Hitung 12 + 25 - 10!\nAcuan: 27",
+        placeholder="Contoh:\nKUNCI PG:\n1.B 2.B 3.D 4.B 5.A 6.A 7.C 8.A 9.B 10.C 11.C 12.B 13.C 14.A 15.A\n\nKUNCI ESSAY:\n1a. 12 + 25 - 10 = 27\n1b. 2 x 3 : 6 = 1\n2a. 24/2 = 12\n2b. 1/3 + 2/3 = 3/3 = 1",
         height=180
     )
 
@@ -180,7 +189,12 @@ with tab1:
 
     if st.button("💾 Simpan Acuan Guru", type="primary", use_container_width=True):
         st.session_state.acuan_guru_teks = input_acuan_teks
-        st.success("✅ Acuan penilaian berhasil disimpan! Silakan pindah ke Tab 2.")
+        kunci_cek = parse_kunci_pg(input_acuan_teks)
+        if len(kunci_cek) > 0:
+            poin_pg_per_no = round(bobot_pg / len(kunci_cek), 2)
+            st.success(f"✅ Acuan disimpan! Terdeteksi **{len(kunci_cek)} soal PG** (1 soal benar = **{poin_pg_per_no} poin**, Total PG Maks = **{bobot_pg} poin**).")
+        else:
+            st.success("✅ Acuan penilaian berhasil disimpan! Silakan pindah ke Tab 2.")
 
 # TAB 2: JAWABAN SISWA
 with tab2:
@@ -214,17 +228,19 @@ with tab2:
                 st.error("⚠️ Mohon ketik atau foto acuan guru di Tab 1 terlebih dahulu!")
             else:
                 waktu_mulai = time.time()
-                with st.spinner("🧠 AI sedang membaca dan menalar jawaban siswa..."):
+                with st.spinner("🧠 AI sedang menghitung poin PG & Essay siswa..."):
                     try:
                         if "Fleksibel" in mode_essay:
-                            instruksi_essay = """ATURAN PENILAIAN ESSAY (FLEKSIBEL, KONTEKSTUAL & BIJAKSANA):
-                            1. Jangan menilai secara kaku kata-per-kata! Kunci jawaban guru hanyalah acuan dasar.
-                            2. Pemahaman Konsep / Bahasa: Jika siswa menjawab dengan kalimat atau kata-katanya sendiri namun secara substansi, konsep, atau logika BENAR dan sesuai dengan pertanyaan soal, berikan SKOR PENUH pada nomor tersebut.
-                            3. Penyelesaian Matematika / Hitungan: Jika siswa menggunakan cara/metode berbeda yang valid secara matematis dan hasilnya benar, berikan SKOR PENUH.
-                            4. Nilai Proses (Partial Credit): Jika langkah/cara pengerjaan siswa sudah benar namun ada sedikit kekeliruan di hasil akhir (atau jawaban mendekati tepat), tetap berikan SKOR SEBAGIAN secara proporsional (misal 50%-80% untuk nomor tersebut) dan jelaskan alasannya di detail_essay."""
+                            instruksi_essay = f"""ATURAN PENILAIAN & POIN ESSAY (FLEKSIBEL & KONTEKSTUAL):
+                            - Total Poin Maksimal untuk seluruh Essay adalah {bobot_essay} poin.
+                            - Terdapat {jml_butir_essay} butir/anak soal essay, sehingga setiap 1 butir anak soal (misal 1a, 1b, 2a, 2b) memiliki nilai maksimal {poin_per_butir_essay} poin (Jika 1 nomor terdiri dari 2 anak soal dan keduanya benar, maka mendapat {poin_per_butir_essay * 2} poin).
+                            - Jangan menilai kaku kata-per-kata! Jika jawaban siswa secara substansi, konsep, atau cara matematis BENAR dan sesuai soal, berikan poin penuh ({poin_per_butir_essay} poin) untuk butir tersebut.
+                            - Jika langkah pengerjaan benar namun hasil akhir sedikit keliru, berikan poin sebagian secara bijaksana.
+                            - Jumlahkan poin dari seluruh butir essay siswa ke dalam "poin_essay" (rentang 0 sampai {bobot_essay})."""
                         else:
-                            instruksi_essay = """ATURAN PENILAIAN ESSAY (KETAT):
-                            Nilai jawaban essay siswa harus mengacu ketat pada kesamaan hasil akhir dengan kunci jawaban guru."""
+                            instruksi_essay = f"""ATURAN PENILAIAN & POIN ESSAY (KETAT):
+                            - Total Poin Maksimal seluruh Essay adalah {bobot_essay} poin ({jml_butir_essay} butir anak soal, masing-masing bernilai {poin_per_butir_essay} poin).
+                            - Jumlahkan poin essay yang benar ke dalam "poin_essay" (rentang 0 sampai {bobot_essay})."""
 
                         prompt_text = f"""Anda adalah guru pengoreksi ujian yang cerdas, objektif, dan bijaksana.
                         ACUAN GURU (TEKS):
@@ -242,8 +258,8 @@ with tab2:
                             "nama_terbaca": "Nama Siswa di Kertas",
                             "jawaban_pg_siswa": {{"1": "B", "2": "B"}},
                             "kunci_pg_guru": {{"1": "B", "2": "B"}},
-                            "skor_essay": 90,
-                            "detail_essay": "Penjelasan penilaian tiap nomor essay (sebutkan jika jawaban siswa dinilai benar karena maknanya sesuai soal atau mendapat poin langkah pengerjaan)"
+                            "poin_essay": {bobot_essay},
+                            "detail_essay": "Rincian poin tiap nomor/anak soal essay (contoh: No.1a: {poin_per_butir_essay} poin, No.1b: {poin_per_butir_essay} poin [Total No.1 = {poin_per_butir_essay*2} poin], dst)"
                         }}"""
 
                         res_text, model_terpakai = panggil_ai_stabil(
@@ -265,6 +281,7 @@ with tab2:
                         
                         if len(kunci_final_dict) > 0:
                             total_soal_pg = len(kunci_final_dict)
+                            poin_per_soal_pg = bobot_pg / total_soal_pg
                             benar_pg = 0
                             nomor_salah = []
                             detail_per_nomor = []
@@ -278,16 +295,20 @@ with tab2:
                                     nomor_salah.append(f"No.{no} (Dijawab {jwb_s}, Kunci {kunci_benar})")
                                     detail_per_nomor.append(f"{no}:{jwb_s}[Kunci:{kunci_benar}](❌)")
                             
-                            skor_pg = round((benar_pg / total_soal_pg) * 100, 2)
+                            poin_pg = round(benar_pg * poin_per_soal_pg, 2)
                             info_salah = f"Salah di: {', '.join(nomor_salah)}" if nomor_salah else "Benar Semua!"
-                            rincian_pg_teks = f"Benar {benar_pg} dari {total_soal_pg} soal ({info_salah})"
+                            rincian_pg_teks = f"Benar {benar_pg} dari {total_soal_pg} soal x {round(poin_per_soal_pg, 2)} poin = {poin_pg} poin ({info_salah})"
                         else:
-                            skor_pg = 0.0
+                            poin_pg = 0.0
                             rincian_pg_teks = "Tidak ada kunci PG"
                             detail_per_nomor = []
 
-                        skor_essay = float(hasil_json.get("skor_essay", 0))
-                        nilai_akhir = round((skor_pg * bobot_pg / 100.0) + (skor_essay * bobot_essay / 100.0), 2)
+                        poin_essay = float(hasil_json.get("poin_essay", 0))
+                        # Pastikan poin essay tidak melebihi batas bobot_essay
+                        if poin_essay > bobot_essay:
+                            poin_essay = float(bobot_essay)
+                            
+                        nilai_akhir = round(poin_pg + poin_essay, 2)
                         durasi = round(time.time() - waktu_mulai, 1)
 
                         nama_final = nama_siswa.strip() if nama_siswa.strip() else hasil_json.get("nama_terbaca", f"Siswa {len(st.session_state.data_nilai)+1}")
@@ -295,21 +316,21 @@ with tab2:
                         st.session_state.data_nilai.append({
                             "Nama Siswa": nama_final,
                             "Kelas": kelas_siswa,
-                            "Skor PG": skor_pg,
-                            "Skor Essay": skor_essay,
-                            "Nilai Akhir": nilai_akhir,
+                            f"Poin PG (Maks {bobot_pg})": poin_pg,
+                            f"Poin Essay (Maks {bobot_essay})": poin_essay,
+                            "Nilai Akhir (Total)": nilai_akhir,
                             "Rincian PG": rincian_pg_teks,
-                            "Catatan Essay": hasil_json.get("detail_essay", ""),
+                            "Rincian Poin Essay": hasil_json.get("detail_essay", ""),
                             "Status": "⏳ Sementara (Perlu Review)"
                         })
                         
                         st.success(f"✅ Berhasil dalam **{durasi} detik** (Mesin: `{model_terpakai}`)! Siswa: **{nama_final}**")
                         col_r1, col_r2, col_r3 = st.columns(3)
-                        col_r1.metric("Skor PG", skor_pg)
-                        col_r2.metric("Skor Essay", skor_essay)
-                        col_r3.metric("Nilai Akhir", nilai_akhir)
+                        col_r1.metric(f"Poin PG (Maks {bobot_pg})", poin_pg)
+                        col_r2.metric(f"Poin Essay (Maks {bobot_essay})", poin_essay)
+                        col_r3.metric("Nilai Akhir (PG + Essay)", nilai_akhir)
                         
-                        st.info(f"**Rincian PG:** {rincian_pg_teks}\n\n**Per Nomor:** {', '.join(detail_per_nomor)}\n\n**Catatan Essay (Penalaran AI):** {hasil_json.get('detail_essay', '')}")
+                        st.info(f"**Perhitungan PG:** {rincian_pg_teks}\n\n**Per Nomor PG:** {', '.join(detail_per_nomor)}\n\n**Rincian Poin Essay:** {hasil_json.get('detail_essay', '')}")
                         
                     except Exception as e:
                         st.error(f"⚠️ {e}")
