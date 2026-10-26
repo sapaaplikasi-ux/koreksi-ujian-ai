@@ -23,7 +23,6 @@ def load_key():
             return f.read().strip()
     return ""
 
-# Kompresi gambar & ubah ke Base64 agar pengiriman stabil & cepat
 def prepare_image_and_b64(img, rotasi=0, max_size=1024):
     img_fixed = ImageOps.exif_transpose(img).copy()
     if img_fixed.mode in ("RGBA", "P"):
@@ -43,7 +42,6 @@ def parse_kunci_pg(teks):
     pairs = re.findall(r'\b(\d+)\s*[\.\:\-\)]\s*([A-Ea-e])\b', teks)
     return {str(num): ans.upper() for num, ans in pairs}
 
-# FUNGSI JALUR LANGSUNG HTTP
 def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa, provider):
     if provider == "Groq Vision (Super Cepat 2 Detik)" or api_key.startswith("gsk_"):
         url = "https://api.groq.com/openai/v1/chat/completions"
@@ -109,7 +107,7 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa, provider):
                 continue
     raise Exception(f"Kuota Google Gemini sedang penuh ({detail_err}). Silakan tunggu sebentar atau gunakan Groq.")
 
-st.title("📝 Aplikasi Koreksi Ujian AI (Sistem Poin Langsung 🎯)")
+st.title("📝 Aplikasi Koreksi Ujian AI (Penilaian Essay Kontekstual & Kunci 🧠)")
 st.caption("SMPN 4 Tamban - Koreksi Otomatis PG & Essay")
 st.markdown("---")
 
@@ -125,27 +123,16 @@ with st.sidebar:
     
     st.markdown("---")
     st.subheader("📊 Pengaturan Poin & Bobot")
-    bobot_pg = st.number_input("Total Poin Maksimal PG:", min_value=0, max_value=100, value=60, help="Contoh: 60 poin. Jika ada 15 soal PG, maka 1 soal otomatis bernilai 4 poin.")
-    bobot_essay = st.number_input("Total Poin Maksimal Essay:", min_value=0, max_value=100, value=40, help="Contoh: 40 poin. Jika ada 2 soal (masing-masing 2 anak soal = 4 butir), maka tiap anak soal bernilai 10 poin (1 soal utuh = 20 poin).")
+    bobot_pg = st.number_input("Total Poin Maksimal PG:", min_value=0, max_value=100, value=60)
+    bobot_essay = st.number_input("Total Poin Maksimal Essay:", min_value=0, max_value=100, value=40)
     
     jml_butir_essay = st.number_input(
         "Jumlah Total Butir / Anak Soal Essay:", 
         min_value=1, max_value=50, value=4,
-        help="Isi total anak soal essay. Contoh: 2 soal essay yang masing-masing punya anak soal a dan b berarti totalnya 4 butir (masing-masing bernilai 10 poin)."
+        help="Contoh: 2 soal essay dengan masing-masing 2 anak soal (1a, 1b, 2a, 2b) berarti diisi 4 butir."
     )
     poin_per_butir_essay = round(bobot_essay / jml_butir_essay, 2)
-    st.caption(f"ℹ️ **Info Essay:** Dengan {jml_butir_essay} butir anak soal, maka setiap 1 anak soal benar mendapat **{poin_per_butir_essay} poin** (Total Maks: **{bobot_essay} poin**).")
-
-    st.markdown("---")
-    st.subheader("🧠 Gaya Koreksi Essay")
-    mode_essay = st.radio(
-        "Cara AI Menilai Essay:",
-        [
-            "Fleksibel & Kontekstual (Menilai makna, cara alternatif, & skor langkah)",
-            "Ketat (Harus sama persis dengan kunci guru)"
-        ],
-        index=0
-    )
+    st.caption(f"ℹ️ **Info Essay:** {jml_butir_essay} butir anak soal = **{poin_per_butir_essay} poin** per butir (Total Maks: **{bobot_essay} poin**).")
 
 if "acuan_guru_img" not in st.session_state:
     st.session_state.acuan_guru_img = None
@@ -165,12 +152,12 @@ tab1, tab2, tab3 = st.tabs([
 # TAB 1: ACUAN GURU
 with tab1:
     st.subheader("📸 1. Upload / Ketik Acuan Penilaian (PG & Essay Jadi Satu)")
-    st.info("💡 Ketik atau foto Kunci PG beserta Soal/Jawaban Essay Anda. Poin per nomor akan dihitung otomatis sesuai bobot di sebelah kiri.")
+    st.info("💡 Masukkan Kunci PG dan Kunci/Soal Essay Anda. AI akan menilai berdasarkan kecocokan kunci **ATAU** penalaran makna yang benar.")
     
     input_acuan_teks = st.text_area(
         "✍️ Ketik / Copy-Paste Kunci PG & Soal/Jawaban Essay di Sini:", 
         value=st.session_state.acuan_guru_teks,
-        placeholder="Contoh:\nKUNCI PG:\n1.B 2.B 3.D 4.B 5.A 6.A 7.C 8.A 9.B 10.C 11.C 12.B 13.C 14.A 15.A\n\nKUNCI ESSAY:\n1a. 12 + 25 - 10 = 27\n1b. 2 x 3 : 6 = 1\n2a. 24/2 = 12\n2b. 1/3 + 2/3 = 3/3 = 1",
+        placeholder="Contoh:\nKUNCI PG:\n1.B 2.B 3.D 4.B 5.A\n\nKUNCI ESSAY:\n1a. 12 + 25 - 10 = 27\n1b. 2 x 3 : 6 = 1\n2a. Sisi miring segitiga siku-siku",
         height=180
     )
 
@@ -192,7 +179,7 @@ with tab1:
         kunci_cek = parse_kunci_pg(input_acuan_teks)
         if len(kunci_cek) > 0:
             poin_pg_per_no = round(bobot_pg / len(kunci_cek), 2)
-            st.success(f"✅ Acuan disimpan! Terdeteksi **{len(kunci_cek)} soal PG** (1 soal benar = **{poin_pg_per_no} poin**, Total PG Maks = **{bobot_pg} poin**).")
+            st.success(f"✅ Acuan disimpan! Terdeteksi **{len(kunci_cek)} soal PG** (1 soal = **{poin_pg_per_no} poin**).")
         else:
             st.success("✅ Acuan penilaian berhasil disimpan! Silakan pindah ke Tab 2.")
 
@@ -228,30 +215,24 @@ with tab2:
                 st.error("⚠️ Mohon ketik atau foto acuan guru di Tab 1 terlebih dahulu!")
             else:
                 waktu_mulai = time.time()
-                with st.spinner("🧠 AI sedang menghitung poin PG & Essay siswa..."):
+                with st.spinner("🧠 AI sedang mengoreksi & menalar jawaban siswa..."):
                     try:
-                        if "Fleksibel" in mode_essay:
-                            instruksi_essay = f"""ATURAN PENILAIAN & POIN ESSAY (FLEKSIBEL & KONTEKSTUAL):
-                            - Total Poin Maksimal untuk seluruh Essay adalah {bobot_essay} poin.
-                            - Terdapat {jml_butir_essay} butir/anak soal essay, sehingga setiap 1 butir anak soal (misal 1a, 1b, 2a, 2b) memiliki nilai maksimal {poin_per_butir_essay} poin (Jika 1 nomor terdiri dari 2 anak soal dan keduanya benar, maka mendapat {poin_per_butir_essay * 2} poin).
-                            - Jangan menilai kaku kata-per-kata! Jika jawaban siswa secara substansi, konsep, atau cara matematis BENAR dan sesuai soal, berikan poin penuh ({poin_per_butir_essay} poin) untuk butir tersebut.
-                            - Jika langkah pengerjaan benar namun hasil akhir sedikit keliru, berikan poin sebagian secara bijaksana.
-                            - Jumlahkan poin dari seluruh butir essay siswa ke dalam "poin_essay" (rentang 0 sampai {bobot_essay})."""
-                        else:
-                            instruksi_essay = f"""ATURAN PENILAIAN & POIN ESSAY (KETAT):
-                            - Total Poin Maksimal seluruh Essay adalah {bobot_essay} poin ({jml_butir_essay} butir anak soal, masing-masing bernilai {poin_per_butir_essay} poin).
-                            - Jumlahkan poin essay yang benar ke dalam "poin_essay" (rentang 0 sampai {bobot_essay})."""
-
-                        prompt_text = f"""Anda adalah guru pengoreksi ujian yang cerdas, objektif, dan bijaksana.
+                        prompt_text = f"""Anda adalah guru pengoreksi ujian yang bijaksana, objektif, dan cerdas.
                         ACUAN GURU (TEKS):
                         {teks_acuan_final}
                         
                         ATURAN MEMBACA PILIHAN GANDA (PG):
                         1. Baca setiap baris nomor dengan teliti.
-                        2. Jika ada tanda silang (X) yang dicoret tebal/garis datar dan ada tanda silang (X) lain yang bersih di baris yang sama, maka yang dicoret itu BATAL. Ambil tanda silang (X) yang bersih.
+                        2. Jika ada tanda silang (X) yang dicoret tebal dan ada tanda silang (X) lain yang bersih di baris yang sama, maka yang dicoret itu BATAL. Ambil yang bersih.
                         3. Abaikan nomor yang kosong.
                         
-                        {instruksi_essay}
+                        ATURAN PENILAIAN ESSAY (GABUNGAN KUNCI GURU & PENALARAN KONTEKSTUAL AI):
+                        - Total Poin Maksimal Essay adalah {bobot_essay} poin ({jml_butir_essay} butir anak soal, masing-masing bernilai maksimal {poin_per_butir_essay} poin).
+                        - KATEGORI 1 (Sesuai Kunci Guru): Jika jawaban siswa sama persis atau sangat sesuai dengan kunci jawaban guru, berikan poin penuh ({poin_per_butir_essay} poin) untuk butir tersebut.
+                        - KATEGORI 2 (Benar Secara Kontekstual / Makna): Jika jawaban siswa menggunakan kalimat sendiri, penjelasan lain, atau cara berbeda dari kunci guru, TETAPI secara substansi, konsep, atau logika matematika BENAR dan menjawab pertanyaan soal, AI **wajib membenarkannya** dan memberikan poin penuh ({poin_per_butir_essay} poin). Jangan disalahkan hanya karena kalimatnya tidak persis sama dengan kunci!
+                        - KATEGORI 3 (Sebagian / Salah): Berikan skor sebagian jika langkah benar tapi hasil akhir keliru, atau berikan 0 jika konsepnya memang salah.
+                        - Jumlahkan seluruh poin essay yang diperoleh ke dalam "poin_essay" (maksimal {bobot_essay}).
+                        - Tulis penjelasan ringkas di "detail_essay" mengapa suatu jawaban dinilai benar (apakah sesuai kunci atau karena maknanya sudah benar).
                         
                         Kembalikan HANYA JSON valid dengan struktur persis seperti ini:
                         {{
@@ -259,7 +240,7 @@ with tab2:
                             "jawaban_pg_siswa": {{"1": "B", "2": "B"}},
                             "kunci_pg_guru": {{"1": "B", "2": "B"}},
                             "poin_essay": {bobot_essay},
-                            "detail_essay": "Rincian poin tiap nomor/anak soal essay (contoh: No.1a: {poin_per_butir_essay} poin, No.1b: {poin_per_butir_essay} poin [Total No.1 = {poin_per_butir_essay*2} poin], dst)"
+                            "detail_essay": "Penjelasan penilaian per butir essay secara transparan"
                         }}"""
 
                         res_text, model_terpakai = panggil_ai_stabil(
@@ -304,9 +285,10 @@ with tab2:
                             detail_per_nomor = []
 
                         poin_essay = float(hasil_json.get("poin_essay", 0))
-                        # Pastikan poin essay tidak melebihi batas bobot_essay
                         if poin_essay > bobot_essay:
                             poin_essay = float(bobot_essay)
+                        if poin_essay < 0:
+                            poin_essay = 0.0
                             
                         nilai_akhir = round(poin_pg + poin_essay, 2)
                         durasi = round(time.time() - waktu_mulai, 1)
@@ -320,7 +302,7 @@ with tab2:
                             f"Poin Essay (Maks {bobot_essay})": poin_essay,
                             "Nilai Akhir (Total)": nilai_akhir,
                             "Rincian PG": rincian_pg_teks,
-                            "Rincian Poin Essay": hasil_json.get("detail_essay", ""),
+                            "Catatan Essay": hasil_json.get("detail_essay", ""),
                             "Status": "⏳ Sementara (Perlu Review)"
                         })
                         
@@ -330,7 +312,7 @@ with tab2:
                         col_r2.metric(f"Poin Essay (Maks {bobot_essay})", poin_essay)
                         col_r3.metric("Nilai Akhir (PG + Essay)", nilai_akhir)
                         
-                        st.info(f"**Perhitungan PG:** {rincian_pg_teks}\n\n**Per Nomor PG:** {', '.join(detail_per_nomor)}\n\n**Rincian Poin Essay:** {hasil_json.get('detail_essay', '')}")
+                        st.info(f"**Perhitungan PG:** {rincian_pg_teks}\n\n**Per Nomor PG:** {', '.join(detail_per_nomor)}\n\n**Catatan Penalaran Essay (Guru + Kontekstual AI):** {hasil_json.get('detail_essay', '')}")
                         
                     except Exception as e:
                         st.error(f"⚠️ {e}")
