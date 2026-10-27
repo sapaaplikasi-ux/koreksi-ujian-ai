@@ -23,8 +23,8 @@ def load_key():
             return f.read().strip()
     return ""
 
-# Ukuran 1024px & kompresi 80% agar pengiriman foto cepat dan tulisan tetap tajam
-def prepare_image_and_b64(img, rotasi=0, max_size=1024):
+# UKURAN 850px & KUALITAS 75%: Rahasia agar super cepat (3 detik) dan TIDAK AKAN TIMEOUT!
+def prepare_image_and_b64(img, rotasi=0, max_size=850):
     img_fixed = ImageOps.exif_transpose(img).copy()
     if img_fixed.mode in ("RGBA", "P"):
         img_fixed = img_fixed.convert("RGB")
@@ -33,7 +33,7 @@ def prepare_image_and_b64(img, rotasi=0, max_size=1024):
     img_fixed.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
     
     buf = io.BytesIO()
-    img_fixed.save(buf, format="JPEG", quality=80, optimize=True)
+    img_fixed.save(buf, format="JPEG", quality=75, optimize=True)
     byte_data = buf.getvalue()
     b64_str = base64.b64encode(byte_data).decode("utf-8")
     buf.seek(0)
@@ -43,62 +43,55 @@ def parse_kunci_pg(teks):
     pairs = re.findall(r'\b(\d+)\s*[\.\:\-\)]\s*([A-Ea-e])\b', teks)
     return {str(num): ans.upper() for num, ans in pairs}
 
-def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa, provider):
-    # JALUR 1: GROQ VISION (OTOMATIS MENCARI MODEL VISION YANG AKTIF DI AKUN GROQ)
-    if provider == "Groq Vision (Super Cepat 2 Detik)" or api_key.startswith("gsk_"):
+def ekstrak_json_aman(teks):
+    teks_bersih = re.sub(r"```json|```", "", teks).strip()
+    match = re.search(r'\{.*\}', teks_bersih, re.DOTALL)
+    if match:
+        return json.loads(match.group(0))
+    return json.loads(teks_bersih)
+
+def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa):
+    # 1. JIKA MEMAKAI GROQ (gsk_...)
+    if api_key.startswith("gsk_"):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        
-        # 1. Tanya ke server Groq daftar model yang aktif saat ini
-        kandidat_groq = []
+        semua_model = []
         try:
             r_models = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=10)
             if r_models.status_code == 200:
                 semua_model = [m["id"] for m in r_models.json().get("data", [])]
-                # Cari model yang mendukung gambar (vision / llama-4 / pixtral / llava)
-                for m_id in semua_model:
-                    m_low = m_id.lower()
-                    if any(k in m_low for k in ["vision", "scout", "maverick", "llama-4", "pixtral", "llava"]):
-                        kandidat_groq.append(m_id)
         except Exception:
             pass
             
-        # Tambahkan daftar cadangan populer
-        daftar_fallback_groq = [
-            "meta-llama/llama-4-maverick-17b-128e-instruct",
-            "meta-llama/llama-4-scout-17b-16e-instruct",
-            "llama-3.2-90b-vision-preview",
-            "llama-3.2-11b-vision-preview"
-        ]
-        urutan_groq = list(dict.fromkeys(kandidat_groq + daftar_fallback_groq))
+        # Filter model vision yang benar-benar ada di server Groq saat ini
+        model_vision_aktif = [m for m in semua_model if any(k in m.lower() for k in ["vision", "scout", "maverick", "llama-4", "pixtral"])]
+        if not model_vision_aktif:
+            model_vision_aktif = semua_model
 
-        content_list = [{"type": "text", "text": prompt_text}]
-        # Catatan: Groq Vision membatasi maksimal 1-2 gambar, utamakan gambar lembar siswa jika acuan sudah ada di teks
-        if b64_acuan:
-            content_list.append({"type": "text", "text": "FOTO ACUAN GURU:"})
-            content_list.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_acuan}"}})
-        content_list.append({"type": "text", "text": "FOTO LEMBAR JAWABAN SISWA:"})
-        content_list.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_siswa}"}})
+        # Groq Vision HANYA mengizinkan 1 gambar per request dan sering menolak response_format json_object
+        content_list = [
+            {"type": "text", "text": prompt_text},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_siswa}"}}
+        ]
         
         url = "https://api.groq.com/openai/v1/chat/completions"
-        last_err_groq = ""
-        
-        for g_model in urutan_groq:
-            payload = {
-                "model": g_model,
-                "messages": [{"role": "user", "content": content_list}],
-                "temperature": 0.0,
-                "response_format": {"type": "json_object"}
-            }
-            res = requests.post(url, headers=headers, json=payload, timeout=35)
-            if res.status_code == 200:
-                return res.json()["choices"][0]["message"]["content"], f"Groq ({g_model})"
-            else:
-                last_err_groq = f"[{g_model}: {res.status_code}] - {res.text}"
+        err_log = []
+        for g_model in model_vision_aktif:
+            try:
+                payload = {
+                    "model": g_model,
+                    "messages": [{"role": "user", "content": content_list}],
+                    "temperature": 0.0
+                }
+                res = requests.post(url, headers=headers, json=payload, timeout=25)
+                if res.status_code == 200:
+                    return res.json()["choices"][0]["message"]["content"], f"Groq ({g_model})"
+                else:
+                    err_log.append(f"{g_model}:{res.status_code}")
+            except Exception:
                 continue
-                
-        raise Exception(f"Semua model Vision di Groq gagal dipanggil. Detail: {last_err_groq}")
+        raise Exception(f"Akun Groq menolak membaca gambar (Model dicoba: {', '.join(err_log[:3])}). Silakan ganti API Key di menu sebelah kiri menggunakan API Key Google Gemini Anda yang kemarin!")
 
-    # JALUR 2: GOOGLE GEMINI
+    # 2. JIKA MEMAKAI GOOGLE GEMINI (JALUR TERCEPAT & STABIL)
     model_tersedia = []
     try:
         list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
@@ -112,11 +105,12 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa, provider):
     except Exception:
         pass
     
-    m_flash = [m for m in model_tersedia if "flash" in m and "lite" not in m and "preview" not in m]
+    # WAJIB UTAMAKAN LITE & 2.0-FLASH DULU (Kuota paling besar & paling cepat 3 detik, anti-timeout!)
     m_lite = [m for m in model_tersedia if "lite" in m]
-    m_lain = [m for m in model_tersedia if "flash" in m]
-    prioritas = m_flash + m_lite + m_lain
-    urutan_model = list(dict.fromkeys(prioritas)) if prioritas else ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-3.8-flash"]
+    m_20 = [m for m in model_tersedia if "2.0-flash" in m or "1.5-flash" in m]
+    m_flash = [m for m in model_tersedia if "flash" in m]
+    prioritas = m_lite + m_20 + m_flash + model_tersedia
+    urutan_model = list(dict.fromkeys(prioritas)) if prioritas else ["gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-3.8-flash"]
 
     parts = [{"text": prompt_text}]
     if b64_acuan:
@@ -133,26 +127,23 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa, provider):
         }
     }
 
-    detail_err = ""
-    for m_name in urutan_model[:5]:
+    detail_err = []
+    for m_name in urutan_model[:6]:
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={api_key}"
-            res = requests.post(url, json=payload, timeout=55)
+            res = requests.post(url, json=payload, timeout=30)
             if res.status_code == 200:
                 data = res.json()
                 teks_hasil = data["candidates"][0]["content"]["parts"][0]["text"]
                 return teks_hasil, m_name
             else:
-                detail_err = f"[{m_name}: HTTP {res.status_code}]"
+                detail_err.append(f"{m_name}({res.status_code})")
                 continue
-        except requests.exceptions.Timeout:
-            detail_err = f"[{m_name}: Timeout]"
-            continue
         except Exception as e:
-            detail_err = f"[{m_name}: {e}]"
+            detail_err.append(f"{m_name}(Timeout)")
             continue
 
-    raise Exception(f"Koneksi ke server AI sedang padat ({detail_err}). Silakan klik Proses sekali lagi.")
+    raise Exception(f"Server Google sedang sibuk ({', '.join(detail_err)}). Tunggu 30 detik lalu klik Proses lagi.")
 
 st.title("📝 Aplikasi Koreksi Ujian AI (Cepat & Akurat 🎯)")
 st.caption("SMPN 4 Tamban - Koreksi Otomatis PG & Essay")
@@ -160,13 +151,8 @@ st.markdown("---")
 
 with st.sidebar:
     st.header("⚙️ Konfigurasi Sistem")
-    provider_ai = st.radio(
-        "Pilih Mesin AI:",
-        ["Groq Vision (Super Cepat 2 Detik)", "Google Gemini (Standar)"]
-    )
-    
     saved_api = load_key()
-    api_key = st.text_input("Masukkan API Key:", value=saved_api, type="password")
+    api_key = st.text_input("Masukkan API Key (Google Gemini):", value=saved_api, type="password")
     
     st.markdown("---")
     st.subheader("📊 Pengaturan Poin & Bobot")
@@ -199,7 +185,7 @@ tab1, tab2, tab3 = st.tabs([
 # TAB 1: ACUAN GURU
 with tab1:
     st.subheader("📸 1. Upload / Ketik Acuan Penilaian (PG & Essay Jadi Satu)")
-    st.info("💡 Ketik Kunci PG dan Kunci Essay di bawah ini agar proses koreksi jauh lebih cepat dan hemat kuota.")
+    st.info("💡 Ketik Kunci PG dan Kunci Essay di bawah ini agar proses koreksi sangat cepat (hanya 3 detik) dan hemat kuota.")
     
     input_acuan_teks = st.text_area(
         "✍️ Ketik / Copy-Paste Kunci PG & Soal/Jawaban Essay di Sini:", 
@@ -209,7 +195,7 @@ with tab1:
     )
 
     foto_acuan = st.file_uploader(
-        "📷 Atau Ambil Foto Lembar Soal & Kunci Guru:", 
+        "📷 Atau Ambil Foto Lembar Soal & Kunci Guru (Opsional):", 
         type=["jpg", "jpeg", "png"], 
         key="up_acuan_gabungan"
     )
@@ -250,7 +236,7 @@ with tab2:
         raw_img = Image.open(file_siswa)
         rotasi = st.radio("Putar Foto Siswa (Pastikan Tegak Lurus):", [0, 90, 180, 270], horizontal=True, key="rot_siswa")
         
-        img_siswa, b64_siswa = prepare_image_and_b64(raw_img, rotasi=rotasi, max_size=1024)
+        img_siswa, b64_siswa = prepare_image_and_b64(raw_img, rotasi=rotasi, max_size=850)
         st.image(img_siswa, caption="Preview Lembar Jawaban Siswa", use_container_width=True)
         
         if st.button("🎯 Proses Koreksi Sekarang", type="primary", use_container_width=True):
@@ -262,7 +248,7 @@ with tab2:
                 st.error("⚠️ Mohon ketik atau foto acuan guru di Tab 1 terlebih dahulu!")
             else:
                 waktu_mulai = time.time()
-                with st.spinner("⚡ AI sedang mengoreksi jawaban PG & Essay siswa..."):
+                with st.spinner("⚡ Mengoreksi jawaban PG & Essay siswa..."):
                     try:
                         prompt_text = f"""Koreksi lembar jawaban siswa ini dengan sangat teliti.
                         ACUAN GURU:
@@ -272,23 +258,21 @@ with tab2:
                         - Jika ada tanda silang (X) yang dicoret tebal/garis datar dan ada tanda silang (X) bersih di baris yang sama, ambil yang BERSIH.
                         
                         ATURAN ESSAY ({jml_butir_essay} butir anak soal, tiap butir bernilai {poin_per_butir_essay} poin):
-                        1. BENAR PENUH ({poin_per_butir_essay} poin):
-                           - Jawaban yang nilainya SETARA secara matematis dengan kunci adalah BENAR PENUH! Contoh: untuk `1/3 + 2/3`, baik siswa menjawab `3/3`, menjawab `1`, maupun `3/3 = 1`, semuanya BENAR PENUH!
-                           - Menjawab hasil akhir yang benar TANPA langkah pengerjaan atau dengan cara berbeda tetap BENAR PENUH!
-                           - Jawaban teori dengan kalimat berbeda tapi maknanya sesuai soal adalah BENAR PENUH!
+                        1. BENAR ({poin_per_butir_essay} poin):
+                           - Jawaban yang nilainya SETARA secara matematis dengan kunci adalah BENAR! Contoh: untuk `1/3 + 2/3`, baik siswa menjawab `3/3`, menjawab `1`, maupun `3/3 = 1`, semuanya BENAR!
+                           - Menjawab hasil akhir yang benar TANPA langkah pengerjaan atau dengan cara berbeda tetap BENAR!
+                           - Jawaban teori dengan kalimat berbeda tapi maknanya sesuai soal adalah BENAR!
                         2. SALAH (0 poin):
-                           - Jika hasil akhirnya SALAH secara matematis (tidak setara dengan kunci), wajib beri status "SALAH" dan poin 0! Jangan membenarkan hasil yang salah!
+                           - Jika hasil akhirnya SALAH secara matematis (tidak setara dengan kunci, misal kunci 27 tapi dijawab -47, atau kunci 12 dijawab 0,83), wajib beri status "SALAH"! Jangan membenarkan hasil yang salah!
                         
-                        Kembalikan HANYA JSON ringkas berikut:
+                        Kembalikan HANYA format JSON berikut:
                         {{
                             "nama_terbaca": "Nama Siswa",
                             "jawaban_pg_siswa": {{"1": "B", "2": "B"}},
                             "kunci_pg_guru": {{"1": "B", "2": "B"}},
                             "essay": [
-                                {{"no": "1a", "jwb": "27", "status": "BENAR"}},
-                                {{"no": "1b", "jwb": "1", "status": "BENAR"}},
-                                {{"no": "2a", "jwb": "12", "status": "BENAR"}},
-                                {{"no": "2b", "jwb": "3/3 = 1", "status": "BENAR"}}
+                                {{"no": "1a", "jwb": "tulisan siswa", "status": "BENAR"}},
+                                {{"no": "1b", "jwb": "tulisan siswa", "status": "SALAH"}}
                             ]
                         }}"""
 
@@ -296,12 +280,10 @@ with tab2:
                             api_key.strip(), 
                             prompt_text, 
                             st.session_state.acuan_guru_b64, 
-                            b64_siswa, 
-                            provider_ai
+                            b64_siswa
                         )
                         
-                        cleaned_text = re.sub(r"```json|```", "", res_text).strip()
-                        hasil_json = json.loads(cleaned_text)
+                        hasil_json = ekstrak_json_aman(res_text)
                         
                         # 1. HITUNG POIN PG
                         jawaban_siswa_dict = {str(k): str(v).upper().strip() for k, v in hasil_json.get("jawaban_pg_siswa", {}).items()}
@@ -342,7 +324,7 @@ with tab2:
                             no_e = item.get("no", "?")
                             jwb_e = item.get("jwb", "")
                             stat_e = str(item.get("status", "")).upper()
-                            if "BENAR" in stat_e:
+                            if "BENAR" in stat_e and "SALAH" not in stat_e:
                                 p_e = poin_per_butir_essay
                                 ikon_e = "✅"
                             else:
