@@ -44,30 +44,61 @@ def parse_kunci_pg(teks):
     return {str(num): ans.upper() for num, ans in pairs}
 
 def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa, provider):
-    # JALUR 1: GROQ VISION
+    # JALUR 1: GROQ VISION (OTOMATIS MENCARI MODEL VISION YANG AKTIF DI AKUN GROQ)
     if provider == "Groq Vision (Super Cepat 2 Detik)" or api_key.startswith("gsk_"):
-        url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        
+        # 1. Tanya ke server Groq daftar model yang aktif saat ini
+        kandidat_groq = []
+        try:
+            r_models = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=10)
+            if r_models.status_code == 200:
+                semua_model = [m["id"] for m in r_models.json().get("data", [])]
+                # Cari model yang mendukung gambar (vision / llama-4 / pixtral / llava)
+                for m_id in semua_model:
+                    m_low = m_id.lower()
+                    if any(k in m_low for k in ["vision", "scout", "maverick", "llama-4", "pixtral", "llava"]):
+                        kandidat_groq.append(m_id)
+        except Exception:
+            pass
+            
+        # Tambahkan daftar cadangan populer
+        daftar_fallback_groq = [
+            "meta-llama/llama-4-maverick-17b-128e-instruct",
+            "meta-llama/llama-4-scout-17b-16e-instruct",
+            "llama-3.2-90b-vision-preview",
+            "llama-3.2-11b-vision-preview"
+        ]
+        urutan_groq = list(dict.fromkeys(kandidat_groq + daftar_fallback_groq))
+
         content_list = [{"type": "text", "text": prompt_text}]
+        # Catatan: Groq Vision membatasi maksimal 1-2 gambar, utamakan gambar lembar siswa jika acuan sudah ada di teks
         if b64_acuan:
             content_list.append({"type": "text", "text": "FOTO ACUAN GURU:"})
             content_list.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_acuan}"}})
         content_list.append({"type": "text", "text": "FOTO LEMBAR JAWABAN SISWA:"})
         content_list.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_siswa}"}})
         
-        payload = {
-            "model": "meta-llama/llama-4-scout-17b-16e-instruct",
-            "messages": [{"role": "user", "content": content_list}],
-            "temperature": 0.0,
-            "response_format": {"type": "json_object"}
-        }
-        res = requests.post(url, headers=headers, json=payload, timeout=45)
-        if res.status_code == 200:
-            return res.json()["choices"][0]["message"]["content"], "Groq Llama-4 Vision"
-        else:
-            raise Exception(f"Groq Error ({res.status_code}): {res.text}")
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        last_err_groq = ""
+        
+        for g_model in urutan_groq:
+            payload = {
+                "model": g_model,
+                "messages": [{"role": "user", "content": content_list}],
+                "temperature": 0.0,
+                "response_format": {"type": "json_object"}
+            }
+            res = requests.post(url, headers=headers, json=payload, timeout=35)
+            if res.status_code == 200:
+                return res.json()["choices"][0]["message"]["content"], f"Groq ({g_model})"
+            else:
+                last_err_groq = f"[{g_model}: {res.status_code}] - {res.text}"
+                continue
+                
+        raise Exception(f"Semua model Vision di Groq gagal dipanggil. Detail: {last_err_groq}")
 
-    # JALUR 2: GOOGLE GEMINI (DENGAN PENANGANAN TIMEOUT & PRIORITAS MODEL CEPAT)
+    # JALUR 2: GOOGLE GEMINI
     model_tersedia = []
     try:
         list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
@@ -81,7 +112,6 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa, provider):
     except Exception:
         pass
     
-    # Utamakan model flash & lite yang paling cepat merespons (tidak mudah timeout)
     m_flash = [m for m in model_tersedia if "flash" in m and "lite" not in m and "preview" not in m]
     m_lite = [m for m in model_tersedia if "lite" in m]
     m_lain = [m for m in model_tersedia if "flash" in m]
@@ -107,7 +137,6 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa, provider):
     for m_name in urutan_model[:5]:
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={api_key}"
-            # Timeout dilonggarkan ke 55 detik agar tidak putus di tengah jalan
             res = requests.post(url, json=payload, timeout=55)
             if res.status_code == 200:
                 data = res.json()
@@ -118,12 +147,12 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa, provider):
                 continue
         except requests.exceptions.Timeout:
             detail_err = f"[{m_name}: Timeout]"
-            continue # Jika model ini lambat, otomatis pindah ke model berikutnya!
+            continue
         except Exception as e:
             detail_err = f"[{m_name}: {e}]"
             continue
 
-    raise Exception(f"Koneksi ke server AI sedang padat ({detail_err}). Silakan klik Proses sekali lagi atau gunakan Groq Vision.")
+    raise Exception(f"Koneksi ke server AI sedang padat ({detail_err}). Silakan klik Proses sekali lagi.")
 
 st.title("📝 Aplikasi Koreksi Ujian AI (Cepat & Akurat 🎯)")
 st.caption("SMPN 4 Tamban - Koreksi Otomatis PG & Essay")
@@ -133,7 +162,7 @@ with st.sidebar:
     st.header("⚙️ Konfigurasi Sistem")
     provider_ai = st.radio(
         "Pilih Mesin AI:",
-        ["Google Gemini (Standar)", "Groq Vision (Super Cepat 2 Detik)"]
+        ["Groq Vision (Super Cepat 2 Detik)", "Google Gemini (Standar)"]
     )
     
     saved_api = load_key()
@@ -235,7 +264,6 @@ with tab2:
                 waktu_mulai = time.time()
                 with st.spinner("⚡ AI sedang mengoreksi jawaban PG & Essay siswa..."):
                     try:
-                        # Prompt diringkas agar respons JSON sangat cepat (tidak timeout) namun tetap akurat
                         prompt_text = f"""Koreksi lembar jawaban siswa ini dengan sangat teliti.
                         ACUAN GURU:
                         {teks_acuan_final}
