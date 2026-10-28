@@ -8,22 +8,49 @@ import time
 import io
 import base64
 import requests
+import gc
 
 st.set_page_config(page_title="Koreksi Ujian AI - SMPN 4 Tamban", layout="wide")
 
-KEY_FILE = "api_key_saved.txt"
-def load_key():
+# File database ringan untuk menyimpan API Key masing-masing guru berdasarkan nama
+DB_GURU_FILE = "db_apikey_guru.json"
+
+def muat_db_guru():
+    if os.path.exists(DB_GURU_FILE):
+        try:
+            with open(DB_GURU_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def simpan_key_guru(nama_guru, api_key):
+    if not nama_guru or not api_key:
+        return
+    db = muat_db_guru()
+    id_guru = re.sub(r'[^a-z0-9]', '', nama_guru.lower())
+    db[id_guru] = api_key.strip()
     try:
-        if "GEMINI_API_KEY" in st.secrets:
+        with open(DB_GURU_FILE, "w") as f:
+            json.dump(db, f)
+    except Exception:
+        pass
+
+def ambil_key_guru(nama_guru):
+    if not nama_guru:
+        return ""
+    id_guru = re.sub(r'[^a-z0-9]', '', nama_guru.lower())
+    db = muat_db_guru()
+    if id_guru in db:
+        return db[id_guru]
+    # Cek juga kalau ada di Streamlit Secrets sesuai nama guru (misal GEMINI_API_KEY)
+    try:
+        if id_guru == "admin" and "GEMINI_API_KEY" in st.secrets:
             return st.secrets["GEMINI_API_KEY"].strip()
     except Exception:
         pass
-    if os.path.exists(KEY_FILE):
-        with open(KEY_FILE, "r") as f:
-            return f.read().strip()
     return ""
 
-# Ukuran 950px & kualitas 80%: Cepat (3 detik) dan huruf/kotak tabel PG terlihat tajam
 def prepare_image_and_b64(img, rotasi=0, max_size=950):
     img_fixed = ImageOps.exif_transpose(img).copy()
     if img_fixed.mode in ("RGBA", "P"):
@@ -40,17 +67,14 @@ def prepare_image_and_b64(img, rotasi=0, max_size=950):
     return Image.open(buf), b64_str
 
 def parse_kunci_pg(teks):
-    # Hanya ambil kunci PG sebelum kata ESSAY/ESAI/URAIAN
     bagian_pg = re.split(r'(?:ESSAY|ESAI|URAIAN)', teks, flags=re.IGNORECASE)[0]
     pairs = re.findall(r'\b(\d+)\s*[\.\:\-\)]\s*([A-Ea-e])\b', bagian_pg)
     return {str(num): ans.upper() for num, ans in pairs}
 
 def ambil_acuan_essay_saja(teks):
-    # Pisahkan teks essay saja agar AI TIDAK MELIHAT kunci PG saat membaca lembar siswa (Mencegah AI membenarkan PG yang meragukan)
     match = re.search(r'(?:ESSAY|ESAI|URAIAN).*', teks, re.IGNORECASE | re.DOTALL)
     if match:
         return match.group(0)
-    # Jika tidak ada judul ESSAY, hapus baris yang berpola kunci PG (1.A 2.B dst)
     tanpa_pg = re.sub(r'\b\d+\s*[\.\:\-\)]\s*[A-Ea-e]\b', '', teks)
     return tanpa_pg.strip()
 
@@ -137,7 +161,7 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa):
     model_tersedia = []
     try:
         list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-        res_list = requests.get(list_url, timeout=10)
+        res_list = requests.get(list_url, timeout=8)
         if res_list.status_code == 200:
             for m in res_list.json().get("models", []):
                 name = m.get("name", "").replace("models/", "")
@@ -184,10 +208,10 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa):
             detail_err.append(f"{m_name}(Timeout)")
             continue
 
-    raise Exception(f"Server Google sedang sibuk ({', '.join(detail_err)}). Tunggu 30 detik lalu klik Proses lagi.")
+    raise Exception(f"Koneksi sedang padat ({', '.join(detail_err[:3])}). Pastikan API Key Anda benar atau tunggu 20 detik lalu coba lagi.")
 
-st.title("📝 Aplikasi Koreksi Ujian AI (Blind PG & Anti-Bias 🎯)")
-st.caption("SMPN 4 Tamban - Koreksi Otomatis PG Objektif & Essay Multi-Struktur")
+st.title("📝 Aplikasi Koreksi Ujian AI")
+st.caption("SMPN 4 Tamban - Sistem Koreksi Ujian Mandiri (Setiap Guru Punya Profil API Key Sendiri)")
 st.markdown("---")
 
 if "acuan_guru_img" not in st.session_state:
@@ -201,10 +225,43 @@ if "struktur_essay_str" not in st.session_state:
 if "data_nilai" not in st.session_state:
     st.session_state.data_nilai = []
 
+# Cek apakah di link URL HP guru sudah ada penanda nama guru (contoh: ?guru=budi)
+nama_dari_url = st.query_params.get("guru", "")
+
 with st.sidebar:
-    st.header("⚙️ Konfigurasi Sistem")
-    saved_api = load_key()
-    api_key = st.text_input("Masukkan API Key (Google Gemini):", value=saved_api, type="password")
+    st.header("👤 Profil & API Key Guru")
+    nama_guru_login = st.text_input(
+        "1. Ketik Nama Panggilan Anda:",
+        value=nama_dari_url,
+        placeholder="Contoh: Pak Budi / Ibu Siti",
+        help="Ketik nama Anda agar API Key Anda tersimpan khusus untuk HP Anda dan tidak tertukar dengan guru lain."
+    )
+    
+    # Otomatis cari API Key guru tersebut jika namanya sudah pernah disimpan
+    saved_key_guru = ambil_key_guru(nama_guru_login)
+    
+    api_key_input = st.text_input(
+        "2. Tempel API Key Google AI Studio:", 
+        value=saved_key_guru, 
+        type="password",
+        help="Dapatkan gratis di: aistudio.google.com/apikey"
+    )
+    
+    if st.button("💾 Simpan API Key di HP Saya", use_container_width=True):
+        if not nama_guru_login.strip():
+            st.warning("⚠️ Mohon isi Nama Panggilan Anda terlebih dahulu di kotak nomor 1!")
+        elif not api_key_input.strip():
+            st.warning("⚠️ Mohon tempelkan API Key Anda terlebih dahulu di kotak nomor 2!")
+        else:
+            simpan_key_guru(nama_guru_login, api_key_input)
+            # Kunci nama guru ke dalam URL browser HP mereka agar tahan refresh!
+            st.query_params["guru"] = re.sub(r'[^a-z0-9]', '', nama_guru_login.lower())
+            st.success(f"✅ Tersimpan untuk **{nama_guru_login}**! Walaupun layar HP di-refresh, API Key Anda akan otomatis menempel.")
+
+    if api_key_input:
+        st.caption(f"🟢 **Status:** API Key Aktif ({nama_guru_login if nama_guru_login else 'Siap digunakan'})")
+    else:
+        st.caption("🔴 **Status:** Belum ada API Key. Buat gratis di **aistudio.google.com/apikey**")
     
     st.markdown("---")
     st.subheader("🔍 Aturan Ketegasan PG")
@@ -259,7 +316,7 @@ tab1, tab2, tab3 = st.tabs([
 # TAB 1: ACUAN GURU
 with tab1:
     st.subheader("📸 1. Upload / Ketik Acuan Penilaian (PG & Essay Jadi Satu)")
-    st.info("💡 **Sistem Blind PG Aktif:** Kunci PG yang Anda ketik di sini disembunyikan dari AI saat AI membaca lembar jawaban siswa, sehingga AI tidak bisa lagi 'berprasangka baik' membenarkan jawaban siswa yang meragukan/banyak coretan!")
+    st.info("💡 Ketik Kunci PG dan Kunci Essay Anda di bawah ini. Setiap guru memiliki lembar kerja terpisah di HP masing-masing.")
     
     input_acuan_teks = st.text_area(
         "✍️ Ketik / Copy-Paste Kunci PG & Soal/Jawaban Essay di Sini:", 
@@ -319,13 +376,18 @@ with tab2:
         if st.button("🎯 Proses Koreksi Sekarang", type="primary", use_container_width=True):
             teks_acuan_final = input_acuan_teks if input_acuan_teks else st.session_state.acuan_guru_teks
 
-            if not api_key:
-                st.error("⚠️ Masukkan API Key terlebih dahulu di menu sebelah kiri!")
+            if not api_key_input.strip():
+                st.error("⚠️ Masukkan API Key pribadi Anda terlebih dahulu di menu sebelah kiri!")
             elif not st.session_state.acuan_guru_b64 and not teks_acuan_final:
                 st.error("⚠️ Mohon ketik atau foto acuan guru di Tab 1 terlebih dahulu!")
             else:
+                # Otomatis simpan API key jika guru sudah mengisi namanya
+                if nama_guru_login.strip():
+                    simpan_key_guru(nama_guru_login, api_key_input)
+                    st.query_params["guru"] = re.sub(r'[^a-z0-9]', '', nama_guru_login.lower())
+
                 waktu_mulai = time.time()
-                with st.spinner("🔍 Membaca lembar siswa secara objektif (Blind PG OCR)..."):
+                with st.spinner("🔍 Membaca lembar siswa secara objektif..."):
                     try:
                         kunci_manual_dict = parse_kunci_pg(teks_acuan_final)
                         acuan_essay_saja = ambil_acuan_essay_saja(teks_acuan_final)
@@ -345,7 +407,6 @@ with tab2:
                             1. Baca huruf yang disilang (X), dibulati hitam (●), atau dilingkari (O) pada tiap nomor.
                             2. Jika ada tanda yang dicoret tebal/garis datar (=) dan ada tanda lain yang bersih di baris yang sama, ambil huruf yang BERSIH. Jika keduanya sama-sama kotor/ganda tanpa pembatalan, tulis "GANDA"."""
 
-                        # Jika Kunci PG sudah diketik di teks, jangan kirim kunci PG ke AI (Blind Grading agar AI 100% jujur!)
                         teks_acuan_untuk_ai = acuan_essay_saja if len(kunci_manual_dict) > 0 else teks_acuan_final
 
                         prompt_text = f"""Anda adalah mesin pembaca optik (OCR) ujian yang sangat objektif dan tanpa kompromi.
@@ -369,7 +430,7 @@ with tab2:
                         }}"""
 
                         res_text, model_terpakai = panggil_ai_stabil(
-                            api_key.strip(), 
+                            api_key_input.strip(), 
                             prompt_text, 
                             st.session_state.acuan_guru_b64 if len(kunci_manual_dict) == 0 else None, 
                             b64_siswa
@@ -377,7 +438,7 @@ with tab2:
                         
                         hasil_json = ekstrak_json_aman(res_text)
                         
-                        # 1. HITUNG POIN PG SECARA MURNI DI PYTHON
+                        # 1. HITUNG POIN PG
                         jawaban_siswa_dict = {str(k): str(v).upper().strip() for k, v in hasil_json.get("jawaban_pg_siswa", {}).items()}
                         kunci_ai_dict = {str(k): str(v).upper().strip() for k, v in hasil_json.get("kunci_pg_guru", {}).items()}
                         
@@ -451,6 +512,8 @@ with tab2:
                             "Catatan Essay": detail_essay_teks,
                             "Status": "⏳ Sementara (Perlu Review)"
                         })
+                        
+                        gc.collect()
                         
                         st.success(f"✅ Berhasil dalam **{durasi} detik** (Mesin: `{model_terpakai}`)! Siswa: **{nama_final}**")
                         col_r1, col_r2, col_r3 = st.columns(3)
