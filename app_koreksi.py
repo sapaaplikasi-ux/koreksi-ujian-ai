@@ -11,12 +11,29 @@ import requests
 import gc
 import hashlib
 
-# Pastikan tampilan standar dan sidebar selalu aktif
 st.set_page_config(
     page_title="Smart Koreksi AI - Pro Edition", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Membuat tombol panah >> di pojok kiri atas HP berwarna MERAH TERANG & BESAR agar mudah dilihat di HP!
+st.markdown("""
+<style>
+[data-testid="collapsedControl"] {
+    background-color: #ff4b4b !important;
+    color: white !important;
+    border-radius: 8px !important;
+    padding: 4px !important;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3) !important;
+}
+[data-testid="collapsedControl"] svg {
+    fill: white !important;
+    width: 28px !important;
+    height: 28px !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # ==========================================
 # 🔐 FUNGSI KEAMANAN & DATABASE LOKAL
@@ -145,7 +162,7 @@ def hitung_skema_poin_essay(struktur_str, total_bobot_essay):
     return peta_poin
 
 # ==========================================
-# 📌 INISIALISASI MEMORI & SIDEBAR KIRI (SELALU TAMPIL DARI AWAL)
+# 📌 INISIALISASI MEMORI & SIDEBAR KIRI
 # ==========================================
 nama_url = st.query_params.get("u", "")
 lisensi_url = st.query_params.get("k", "")
@@ -176,26 +193,20 @@ if not st.session_state.lisensi_aktif and nama_url and lisensi_url:
         st.session_state.lisensi_aktif = True
         st.session_state.user_aktif = nama_url
 
-# SIDEBAR KIRI DIPASANG DI PALING ATAS AGAR PANAH >> SELALU MUNCUL DI HP
+# SIDEBAR UNTUK LAPTOP & TOMBOL MERAH KIRI ATAS HP
 with st.sidebar:
     st.header("⚙️ Menu Konfigurasi")
     if st.session_state.lisensi_aktif:
         st.success(f"👤 Pengguna: **{st.session_state.user_aktif}**")
-        if st.button("🚪 Keluar / Kunci Aplikasi", use_container_width=True):
+        if st.button("🚪 Keluar / Kunci Aplikasi", use_container_width=True, key="keluar_side"):
             st.session_state.lisensi_aktif = False
             st.query_params.clear()
             st.rerun()
-    else:
-        st.warning("🔒 Silakan login lisensi di layar utama terlebih dahulu.")
 
     st.markdown("---")
     saved_key_guru = ambil_key_guru(st.session_state.user_aktif)
-    api_key_side = st.text_input(
-        "🔑 API Key Google AI Studio:", 
-        value=saved_key_guru, 
-        type="password"
-    )
-    if st.button("💾 Simpan API Key", use_container_width=True):
+    api_key_side = st.text_input("🔑 API Key Google AI Studio:", value=saved_key_guru, type="password", key="key_side")
+    if st.button("💾 Simpan API Key", use_container_width=True, key="simpan_side"):
         simpan_key_guru(st.session_state.user_aktif, api_key_side)
         st.success("✅ API Key disimpan!")
 
@@ -207,13 +218,14 @@ with st.sidebar:
             "Ketat (Coretan kotor, silang meleset/tengah-tengah, atau ganda = SALAH)",
             "Toleran (Tetap tebak 1 huruf yang paling bersih jika ada coretan)"
         ],
-        index=0 if st.session_state.mode_pg_val.startswith("Ketat") else 1
+        index=0 if st.session_state.mode_pg_val.startswith("Ketat") else 1,
+        key="radio_side"
     )
 
     st.markdown("---")
     st.subheader("📊 Bobot & Struktur Essay")
-    st.session_state.bobot_pg_val = st.number_input("Total Poin Maksimal PG:", min_value=0, max_value=100, value=st.session_state.bobot_pg_val)
-    st.session_state.bobot_essay_val = st.number_input("Total Poin Maksimal Essay:", min_value=0, max_value=100, value=st.session_state.bobot_essay_val)
+    st.session_state.bobot_pg_val = st.number_input("Total Poin Maksimal PG:", min_value=0, max_value=100, value=st.session_state.bobot_pg_val, key="pg_side")
+    st.session_state.bobot_essay_val = st.number_input("Total Poin Maksimal Essay:", min_value=0, max_value=100, value=st.session_state.bobot_essay_val, key="es_side")
     
     preset_side = st.selectbox(
         "Pilih Cepat Struktur Essay:",
@@ -222,7 +234,8 @@ with st.sidebar:
             "Kelas 7 (2 Soal: 1a, 1b, 2a, 2b)",
             "Kelas 8 (2 Soal: 1a, 1b, 2)",
             "Kelas 9 (3 Soal: 1a, 1b, 2a, 2b, 2c, 3)"
-        ]
+        ],
+        key="pres_side"
     )
     if preset_side == "Kelas 7 (2 Soal: 1a, 1b, 2a, 2b)":
         st.session_state.struktur_essay_str = "1a, 1b, 2a, 2b"
@@ -231,7 +244,7 @@ with st.sidebar:
     elif preset_side == "Kelas 9 (3 Soal: 1a, 1b, 2a, 2b, 2c, 3)":
         st.session_state.struktur_essay_str = "1a, 1b, 2a, 2b, 2c, 3"
 
-    st.session_state.struktur_essay_str = st.text_input("Daftar Nomor Essay:", value=st.session_state.struktur_essay_str)
+    st.session_state.struktur_essay_str = st.text_input("Daftar Nomor Essay:", value=st.session_state.struktur_essay_str, key="str_side")
 
 # ==========================================
 # 🚪 HALAMAN LOGIN LISENSI (JIKA BELUM LOGIN)
@@ -381,39 +394,26 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa):
     raise Exception(f"Koneksi sedang padat ({', '.join(detail_err[:3])}). Pastikan API Key Anda benar atau tunggu 20 detik lalu coba lagi.")
 
 # ==========================================
-# 📱 LAYAR UTAMA (4 TAB LENGKAP DI TENGAH LAYAR)
+# 📱 LAYAR UTAMA DENGAN KOTAK PENGATURAN DI ATAS (PASTI TAMPIL DI HP!)
 # ==========================================
 st.title("📝 Smart Koreksi Ujian AI")
-st.caption(f"🟢 Aktif untuk: **{st.session_state.user_aktif.upper()}** | Semua menu pengaturan juga tersedia langsung di **Tab 4 (⚙️ Pengaturan)** di bawah ini!")
 
-tab1, tab2, tab3, tab4 = st.tabs([
-    "1️⃣ Acuan Guru", 
-    "2️⃣ Foto Siswa", 
-    "3️⃣ Rekap Nilai",
-    "4️⃣ ⚙️ Pengaturan (Menu Kiri)"
-])
-
-# TAB 4: SEMUA ISI MENU KIRI DITARUH JUGA DI SINI AGAR MUDAH DIAKSES DI HP TANPA SIDEBAR!
-with tab4:
-    st.subheader("⚙️ Pusat Pengaturan Lengkap (Pengganti Sidebar Kiri di HP)")
-    st.info("💡 Semua menu yang ada di sidebar kiri tersedia lengkap di halaman ini agar Anda mudah mengaturnya dari layar HP.")
-    
-    api_key_tab4 = st.text_input("🔑 Masukkan / Ganti API Key Google AI Studio:", value=api_key_side, type="password")
-    if st.button("💾 Simpan API Key Saya", type="primary"):
-        simpan_key_guru(st.session_state.user_aktif, api_key_tab4)
+# KOTAK PENGATURAN KHUSUS HP DI ATAS LAYAR (PENGGANTI SIDEBAR KIRI DI HP!)
+with st.expander("📲 KLIK DI SINI UNTUK BUKA MENU PENGATURAN & API KEY (TAMPILAN HP)", expanded=False):
+    st.info("💡 Menu ini sama persis dengan Sidebar Kiri di Laptop, khusus disediakan di atas agar mudah dibuka di layar HP!")
+    api_key_hp = st.text_input("🔑 API Key Google AI Studio:", value=api_key_side, type="password", key="key_hp_top")
+    if st.button("💾 Simpan API Key Saya", type="primary", use_container_width=True, key="btn_hp_top"):
+        simpan_key_guru(st.session_state.user_aktif, api_key_hp)
         st.success("✅ API Key berhasil disimpan!")
         st.rerun()
 
-    st.markdown("---")
-    c_b1, c_b2 = st.columns(2)
-    with c_b1:
-        bobot_pg_baru = st.number_input("Total Poin Maksimal PG:", min_value=0, max_value=100, value=st.session_state.bobot_pg_val, key="b_pg_t4")
-        st.session_state.bobot_pg_val = bobot_pg_baru
-    with c_b2:
-        bobot_es_baru = st.number_input("Total Poin Maksimal Essay:", min_value=0, max_value=100, value=st.session_state.bobot_essay_val, key="b_es_t4")
-        st.session_state.bobot_essay_val = bobot_es_baru
+    c_hp1, c_hp2 = st.columns(2)
+    with c_hp1:
+        st.session_state.bobot_pg_val = st.number_input("Total Poin Maksimal PG:", min_value=0, max_value=100, value=st.session_state.bobot_pg_val, key="b_pg_hp")
+    with c_hp2:
+        st.session_state.bobot_essay_val = st.number_input("Total Poin Maksimal Essay:", min_value=0, max_value=100, value=st.session_state.bobot_essay_val, key="b_es_hp")
 
-    pilih_kelas_t4 = st.selectbox(
+    pilih_kls_hp = st.selectbox(
         "Pilih Cepat Struktur Essay:",
         [
             "Custom (Sesuai Kotak di Bawah)",
@@ -421,20 +421,18 @@ with tab4:
             "Kelas 8 (2 Soal: 1a, 1b, 2)",
             "Kelas 9 (3 Soal: 1a, 1b, 2a, 2b, 2c, 3)"
         ],
-        key="sel_kls_t4"
+        key="kls_hp_top"
     )
-    if pilih_kelas_t4 == "Kelas 7 (2 Soal: 1a, 1b, 2a, 2b)":
+    if pilih_kls_hp == "Kelas 7 (2 Soal: 1a, 1b, 2a, 2b)":
         st.session_state.struktur_essay_str = "1a, 1b, 2a, 2b"
-    elif pilih_kelas_t4 == "Kelas 8 (2 Soal: 1a, 1b, 2)":
+    elif pilih_kls_hp == "Kelas 8 (2 Soal: 1a, 1b, 2)":
         st.session_state.struktur_essay_str = "1a, 1b, 2"
-    elif pilih_kelas_t4 == "Kelas 9 (3 Soal: 1a, 1b, 2a, 2b, 2c, 3)":
+    elif pilih_kls_hp == "Kelas 9 (3 Soal: 1a, 1b, 2a, 2b, 2c, 3)":
         st.session_state.struktur_essay_str = "1a, 1b, 2a, 2b, 2c, 3"
 
-    struk_baru_t4 = st.text_input("Daftar Nomor/Anak Soal Essay:", value=st.session_state.struktur_essay_str, key="str_t4")
-    st.session_state.struktur_essay_str = struk_baru_t4
-
-    st.markdown("---")
-    if st.button("🚪 Keluar / Kunci Kembali Aplikasi"):
+    st.session_state.struktur_essay_str = st.text_input("Daftar Nomor/Anak Soal Essay:", value=st.session_state.struktur_essay_str, key="str_hp_top")
+    
+    if st.button("🚪 Keluar dari Lisensi", use_container_width=True, key="keluar_hp_top"):
         st.session_state.lisensi_aktif = False
         st.query_params.clear()
         st.rerun()
@@ -445,10 +443,16 @@ peta_poin_essay = hitung_skema_poin_essay(st.session_state.struktur_essay_str, b
 rincian_skema = ", ".join([f"**No.{k}** = `{v}` poin" for k, v in peta_poin_essay.items()])
 api_key_aktif = api_key_side.strip() if api_key_side.strip() else ambil_key_guru(st.session_state.user_aktif)
 
+tab1, tab2, tab3 = st.tabs([
+    "1️⃣ Acuan Guru", 
+    "2️⃣ Foto Siswa", 
+    "3️⃣ Rekap Nilai"
+])
+
 # TAB 1: ACUAN GURU
 with tab1:
     st.subheader("📸 1. Upload / Ketik Acuan Penilaian (PG & Essay Jadi Satu)")
-    st.info(f"⚖️ **Skema Essay Saat Ini (Total {bobot_essay} Poin):** {rincian_skema} *(Bisa diubah di Tab 4 ⚙️ Pengaturan)*")
+    st.info(f"⚖️ **Skema Essay Saat Ini (Total {bobot_essay} Poin):** {rincian_skema}")
     
     input_acuan_teks = st.text_area(
         "✍️ Ketik / Copy-Paste Kunci PG & Soal/Jawaban Essay di Sini:", 
@@ -509,7 +513,7 @@ with tab2:
             teks_acuan_final = input_acuan_teks if input_acuan_teks else st.session_state.acuan_guru_teks
 
             if not api_key_aktif:
-                st.error("⚠️ Masukkan API Key Anda terlebih dahulu di Tab 4 (⚙️ Pengaturan)!")
+                st.error("⚠️ Masukkan API Key Anda terlebih dahulu di kotak '📲 KLIK DI SINI UNTUK BUKA MENU PENGATURAN' di atas!")
             elif not st.session_state.acuan_guru_b64 and not teks_acuan_final:
                 st.error("⚠️ Mohon ketik atau foto acuan guru di Tab 1 terlebih dahulu!")
             else:
