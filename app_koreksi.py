@@ -9,10 +9,55 @@ import io
 import base64
 import requests
 import gc
+import hashlib
 
-st.set_page_config(page_title="Koreksi Ujian AI - SMPN 4 Tamban", layout="wide")
+st.set_page_config(page_title="Smart Koreksi AI - Pro Edition", layout="wide")
 
-# File database ringan untuk menyimpan API Key masing-masing guru berdasarkan nama
+# Sembunyikan menu bawaan Streamlit & tombol Fork GitHub agar terlihat seperti aplikasi komersial profesional
+hide_streamlit_style = """
+<style>
+#MainMenu {visibility: hidden;}
+header {visibility: hidden;}
+footer {visibility: hidden;}
+.stDeployButton {display:none;}
+</style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
+# ==========================================
+# 🔐 SISTEM KEAMANAN & LISENSI PENJUALAN
+# ==========================================
+def get_master_secret():
+    try:
+        if "MASTER_SECRET" in st.secrets:
+            return st.secrets["MASTER_SECRET"].strip()
+    except Exception:
+        pass
+    # Kunci rahasia default jika belum diatur di Streamlit Secrets
+    return "RAHASIA-SUPER-AMAN-2026"
+
+def get_admin_password():
+    try:
+        if "ADMIN_PASSWORD" in st.secrets:
+            return st.secrets["ADMIN_PASSWORD"].strip()
+    except Exception:
+        pass
+    return "admin12345"
+
+def buat_kode_lisensi(nama_user):
+    id_bersih = re.sub(r'[^a-z0-9]', '', nama_user.lower())
+    rahasia = get_master_secret()
+    gabungan = f"{id_bersih}:{rahasia}"
+    hash_hex = hashlib.sha256(gabungan.encode()).hexdigest().upper()
+    return f"PRO-{hash_hex[:6]}"
+
+def cek_validitas_lisensi(nama_user, kode_input):
+    if not nama_user or not kode_input:
+        return False
+    kode_seharusnya = buat_kode_lisensi(nama_user)
+    return kode_input.strip().upper() == kode_seharusnya
+
+# Database lokal untuk menyimpan API Key masing-masing pengguna
 DB_GURU_FILE = "db_apikey_guru.json"
 
 def muat_db_guru():
@@ -43,7 +88,6 @@ def ambil_key_guru(nama_guru):
     db = muat_db_guru()
     if id_guru in db:
         return db[id_guru]
-    # Cek juga kalau ada di Streamlit Secrets sesuai nama guru (misal GEMINI_API_KEY)
     try:
         if id_guru == "admin" and "GEMINI_API_KEY" in st.secrets:
             return st.secrets["GEMINI_API_KEY"].strip()
@@ -51,6 +95,63 @@ def ambil_key_guru(nama_guru):
         pass
     return ""
 
+# ==========================================
+# 🚪 GERBANG LOGIN LISENSI (HALAMAN DEPAN)
+# ==========================================
+nama_url = st.query_params.get("u", "")
+lisensi_url = st.query_params.get("k", "")
+
+if "lisensi_aktif" not in st.session_state:
+    st.session_state.lisensi_aktif = False
+if "user_aktif" not in st.session_state:
+    st.session_state.user_aktif = ""
+
+# Cek otomatis dari URL jika pengguna sudah pernah aktivasi di HP-nya
+if not st.session_state.lisensi_aktif and nama_url and lisensi_url:
+    if cek_validitas_lisensi(nama_url, lisensi_url):
+        st.session_state.lisensi_aktif = True
+        st.session_state.user_aktif = nama_url
+
+if not st.session_state.lisensi_aktif:
+    st.markdown("<h2 style='text-align: center;'>🔒 Aktivasi Lisensi Aplikasi Koreksi AI</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center;'>Aplikasi ini dilindungi hak cipta. Masukkan Nama Pengguna dan Kode Lisensi resmi untuk masuk.</p>", unsafe_allow_html=True)
+    st.markdown("---")
+    
+    col_kiri, col_tengah, col_kanan = st.columns([1, 2, 1])
+    with col_tengah:
+        input_user = st.text_input("👤 Nama Pengguna / Instansi:", value=nama_url, placeholder="Contoh: Ibu Siti / SMPN 1")
+        input_kode = st.text_input("🔑 Kode Lisensi (Serial Key):", value=lisensi_url, type="password", placeholder="Contoh: PRO-XXXXXX")
+        
+        if st.button("🔓 Masuk & Aktifkan Aplikasi", type="primary", use_container_width=True):
+            if cek_validitas_lisensi(input_user, input_kode):
+                st.session_state.lisensi_aktif = True
+                st.session_state.user_aktif = input_user.strip()
+                st.query_params["u"] = re.sub(r'[^a-z0-9]', '', input_user.lower())
+                st.query_params["k"] = input_kode.strip().upper()
+                st.success("✅ Lisensi Valid! Membuka aplikasi...")
+                st.rerun()
+            else:
+                st.error("❌ Nama Pengguna atau Kode Lisensi TIDAK VALID! Silakan hubungi pengembang untuk membeli lisensi resmi.")
+        
+        st.markdown("---")
+        with st.expander("🛠️ Panel Pemilik / Admin (Buat Kode Lisensi Pembeli)"):
+            pw_admin = st.text_input("Password Admin:", type="password")
+            calon_pembeli = st.text_input("Nama Pembeli / Guru yang Didaftarkan:")
+            if st.button("⚡ Buat Kode Lisensi"):
+                if pw_admin == get_admin_password():
+                    if calon_pembeli.strip():
+                        kode_baru = buat_kode_lisensi(calon_pembeli)
+                        id_u = re.sub(r'[^a-z0-9]', '', calon_pembeli.lower())
+                        st.success(f"✅ **Lisensi Berhasil Dibuat!**\n\n- **Nama Pengguna:** `{calon_pembeli}`\n- **Kode Lisensi:** `{kode_baru}`")
+                    else:
+                        st.warning("Isi nama pembeli terlebih dahulu.")
+                else:
+                    st.error("Password Admin salah!")
+    st.stop()
+
+# ==========================================
+# 🚀 FUNGSI UTAMA APLIKASI (HANYA MUNCUL JIKA LISENSI VALID)
+# ==========================================
 def prepare_image_and_b64(img, rotasi=0, max_size=950):
     img_fixed = ImageOps.exif_transpose(img).copy()
     if img_fixed.mode in ("RGBA", "P"):
@@ -210,8 +311,8 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa):
 
     raise Exception(f"Koneksi sedang padat ({', '.join(detail_err[:3])}). Pastikan API Key Anda benar atau tunggu 20 detik lalu coba lagi.")
 
-st.title("📝 Aplikasi Koreksi Ujian AI")
-st.caption("SMPN 4 Tamban - Sistem Koreksi Ujian Mandiri (Setiap Guru Punya Profil API Key Sendiri)")
+st.title("📝 Smart Koreksi Ujian AI - Pro Edition")
+st.caption(f"✅ Lisensi Terdaftar untuk: **{st.session_state.user_aktif.upper()}**")
 st.markdown("---")
 
 if "acuan_guru_img" not in st.session_state:
@@ -225,44 +326,29 @@ if "struktur_essay_str" not in st.session_state:
 if "data_nilai" not in st.session_state:
     st.session_state.data_nilai = []
 
-# Cek apakah di link URL HP guru sudah ada penanda nama guru (contoh: ?guru=budi)
-nama_dari_url = st.query_params.get("guru", "")
-
 with st.sidebar:
-    st.header("👤 Profil & API Key Guru")
-    nama_guru_login = st.text_input(
-        "1. Ketik Nama Panggilan Anda:",
-        value=nama_dari_url,
-        placeholder="Contoh: Pak Budi / Ibu Siti",
-        help="Ketik nama Anda agar API Key Anda tersimpan khusus untuk HP Anda dan tidak tertukar dengan guru lain."
-    )
-    
-    # Otomatis cari API Key guru tersebut jika namanya sudah pernah disimpan
-    saved_key_guru = ambil_key_guru(nama_guru_login)
-    
+    st.header(f"👤 Pengguna: {st.session_state.user_aktif}")
+    if st.button("🚪 Keluar / Ganti Lisensi", use_container_width=True):
+        st.session_state.lisensi_aktif = False
+        st.query_params.clear()
+        st.rerun()
+        
+    st.markdown("---")
+    saved_key_guru = ambil_key_guru(st.session_state.user_aktif)
     api_key_input = st.text_input(
-        "2. Tempel API Key Google AI Studio:", 
+        "🔑 API Key Google AI Studio:", 
         value=saved_key_guru, 
         type="password",
         help="Dapatkan gratis di: aistudio.google.com/apikey"
     )
     
-    if st.button("💾 Simpan API Key di HP Saya", use_container_width=True):
-        if not nama_guru_login.strip():
-            st.warning("⚠️ Mohon isi Nama Panggilan Anda terlebih dahulu di kotak nomor 1!")
-        elif not api_key_input.strip():
-            st.warning("⚠️ Mohon tempelkan API Key Anda terlebih dahulu di kotak nomor 2!")
+    if st.button("💾 Simpan API Key Saya", use_container_width=True):
+        if not api_key_input.strip():
+            st.warning("⚠️ Mohon tempelkan API Key terlebih dahulu!")
         else:
-            simpan_key_guru(nama_guru_login, api_key_input)
-            # Kunci nama guru ke dalam URL browser HP mereka agar tahan refresh!
-            st.query_params["guru"] = re.sub(r'[^a-z0-9]', '', nama_guru_login.lower())
-            st.success(f"✅ Tersimpan untuk **{nama_guru_login}**! Walaupun layar HP di-refresh, API Key Anda akan otomatis menempel.")
+            simpan_key_guru(st.session_state.user_aktif, api_key_input)
+            st.success("✅ API Key berhasil disimpan!")
 
-    if api_key_input:
-        st.caption(f"🟢 **Status:** API Key Aktif ({nama_guru_login if nama_guru_login else 'Siap digunakan'})")
-    else:
-        st.caption("🔴 **Status:** Belum ada API Key. Buat gratis di **aistudio.google.com/apikey**")
-    
     st.markdown("---")
     st.subheader("🔍 Aturan Ketegasan PG")
     mode_ketegasan_pg = st.radio(
@@ -316,8 +402,6 @@ tab1, tab2, tab3 = st.tabs([
 # TAB 1: ACUAN GURU
 with tab1:
     st.subheader("📸 1. Upload / Ketik Acuan Penilaian (PG & Essay Jadi Satu)")
-    st.info("💡 Ketik Kunci PG dan Kunci Essay Anda di bawah ini. Setiap guru memiliki lembar kerja terpisah di HP masing-masing.")
-    
     input_acuan_teks = st.text_area(
         "✍️ Ketik / Copy-Paste Kunci PG & Soal/Jawaban Essay di Sini:", 
         value=st.session_state.acuan_guru_teks,
@@ -381,11 +465,7 @@ with tab2:
             elif not st.session_state.acuan_guru_b64 and not teks_acuan_final:
                 st.error("⚠️ Mohon ketik atau foto acuan guru di Tab 1 terlebih dahulu!")
             else:
-                # Otomatis simpan API key jika guru sudah mengisi namanya
-                if nama_guru_login.strip():
-                    simpan_key_guru(nama_guru_login, api_key_input)
-                    st.query_params["guru"] = re.sub(r'[^a-z0-9]', '', nama_guru_login.lower())
-
+                simpan_key_guru(st.session_state.user_aktif, api_key_input)
                 waktu_mulai = time.time()
                 with st.spinner("🔍 Membaca lembar siswa secara objektif..."):
                     try:
