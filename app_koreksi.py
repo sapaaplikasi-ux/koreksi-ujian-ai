@@ -23,8 +23,8 @@ def load_key():
             return f.read().strip()
     return ""
 
-# Ukuran 850px & kualitas 75%: Cepat (3 detik) dan anti-timeout
-def prepare_image_and_b64(img, rotasi=0, max_size=850):
+# Ukuran 950px & kualitas 80%: Cepat (3 detik) dan huruf/kotak tabel PG terlihat tajam
+def prepare_image_and_b64(img, rotasi=0, max_size=950):
     img_fixed = ImageOps.exif_transpose(img).copy()
     if img_fixed.mode in ("RGBA", "P"):
         img_fixed = img_fixed.convert("RGB")
@@ -33,27 +33,32 @@ def prepare_image_and_b64(img, rotasi=0, max_size=850):
     img_fixed.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
     
     buf = io.BytesIO()
-    img_fixed.save(buf, format="JPEG", quality=75, optimize=True)
+    img_fixed.save(buf, format="JPEG", quality=80, optimize=True)
     byte_data = buf.getvalue()
     b64_str = base64.b64encode(byte_data).decode("utf-8")
     buf.seek(0)
     return Image.open(buf), b64_str
 
 def parse_kunci_pg(teks):
-    pairs = re.findall(r'\b(\d+)\s*[\.\:\-\)]\s*([A-Ea-e])\b', teks)
+    # Hanya ambil kunci PG sebelum kata ESSAY/ESAI/URAIAN
+    bagian_pg = re.split(r'(?:ESSAY|ESAI|URAIAN)', teks, flags=re.IGNORECASE)[0]
+    pairs = re.findall(r'\b(\d+)\s*[\.\:\-\)]\s*([A-Ea-e])\b', bagian_pg)
     return {str(num): ans.upper() for num, ans in pairs}
 
-# FUNGSI PINTAR: Menghitung pembagian poin induk & anak soal otomatis dari struktur nomor essay
+def ambil_acuan_essay_saja(teks):
+    # Pisahkan teks essay saja agar AI TIDAK MELIHAT kunci PG saat membaca lembar siswa (Mencegah AI membenarkan PG yang meragukan)
+    match = re.search(r'(?:ESSAY|ESAI|URAIAN).*', teks, re.IGNORECASE | re.DOTALL)
+    if match:
+        return match.group(0)
+    # Jika tidak ada judul ESSAY, hapus baris yang berpola kunci PG (1.A 2.B dst)
+    tanpa_pg = re.sub(r'\b\d+\s*[\.\:\-\)]\s*[A-Ea-e]\b', '', teks)
+    return tanpa_pg.strip()
+
 def hitung_skema_poin_essay(struktur_str, total_bobot_essay):
-    """
-    Menerima input struktur seperti: '1a, 1b, 2' atau '1a=5, 1b=5, 2a=5, 2b=5, 2c=5, 3=15'
-    Mengembalikan dictionary { '1a': poin, '1b': poin, ... } dengan total = total_bobot_essay
-    """
     items = [x.strip() for x in re.split(r'[,\n]+', struktur_str) if x.strip()]
     if not items:
         return {"1": float(total_bobot_essay)}
     
-    # Cek apakah guru memasukkan poin custom secara langsung (contoh: 1a=5, 1b=5, 3=15)
     custom_poin = {}
     ada_custom = False
     for it in items:
@@ -70,20 +75,16 @@ def hitung_skema_poin_essay(struktur_str, total_bobot_essay):
             custom_poin[it.strip().lower()] = None
 
     if ada_custom and all(v is not None for v in custom_poin.values()):
-        # Normalisasi jika total custom belum sama dengan total_bobot_essay
         total_input = sum(custom_poin.values())
         if total_input > 0:
             return {k: round((v / total_input) * total_bobot_essay, 2) for k, v in custom_poin.items()}
 
-    # Kelompokkan berdasarkan Nomor Induk (Contoh: '1a' dan '1b' masuk ke induk '1', '2' masuk ke induk '2')
     grup_induk = {}
-    urutan_kode = []
     for it in items:
         kode_bersih = re.split(r'[\=\:]', it)[0].strip().lower()
         kode_bersih = re.sub(r'[^0-9a-z]', '', kode_bersih)
         if not kode_bersih:
             continue
-        urutan_kode.append(kode_bersih)
         match_induk = re.match(r'^(\d+)', kode_bersih)
         no_induk = match_induk.group(1) if match_induk else kode_bersih
         if no_induk not in grup_induk:
@@ -103,15 +104,12 @@ def hitung_skema_poin_essay(struktur_str, total_bobot_essay):
 
     return peta_poin
 
-# Deteksi otomatis daftar kode nomor essay dari teks acuan guru jika guru mengetik di Tab 1
 def deteksi_struktur_essay_dari_teks(teks):
-    # Cari bagian setelah kata ESSAY atau ESAI
     bagian_essay = teks
     match_bagian = re.search(r'(?:ESSAY|ESAI|URAIAN).*', teks, re.IGNORECASE | re.DOTALL)
     if match_bagian:
         bagian_essay = match_bagian.group(0)
     
-    # Cari pola nomor di awal baris seperti 1a., 1.a., 1b), 2., 3.
     baris_list = bagian_essay.split('\n')
     ditemukan = []
     for b in baris_list:
@@ -121,7 +119,6 @@ def deteksi_struktur_essay_dari_teks(teks):
             angka = m.group(1)
             huruf = (m.group(2) or "").lower()
             isi = m.group(3).strip()
-            # Pastikan bukan kunci PG tunggal (seperti "1. B" tanpa huruf anak soal)
             if not huruf and re.match(r'^[A-Ea-e]$', isi):
                 continue
             kode = f"{angka}{huruf}"
@@ -137,43 +134,6 @@ def ekstrak_json_aman(teks):
     return json.loads(teks_bersih)
 
 def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa):
-    if api_key.startswith("gsk_"):
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        semua_model = []
-        try:
-            r_models = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=10)
-            if r_models.status_code == 200:
-                semua_model = [m["id"] for m in r_models.json().get("data", [])]
-        except Exception:
-            pass
-            
-        model_vision_aktif = [m for m in semua_model if any(k in m.lower() for k in ["vision", "scout", "maverick", "llama-4", "pixtral"])]
-        if not model_vision_aktif:
-            model_vision_aktif = semua_model
-
-        content_list = [
-            {"type": "text", "text": prompt_text},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_siswa}"}}
-        ]
-        
-        url = "https://api.groq.com/openai/v1/chat/completions"
-        err_log = []
-        for g_model in model_vision_aktif:
-            try:
-                payload = {
-                    "model": g_model,
-                    "messages": [{"role": "user", "content": content_list}],
-                    "temperature": 0.0
-                }
-                res = requests.post(url, headers=headers, json=payload, timeout=25)
-                if res.status_code == 200:
-                    return res.json()["choices"][0]["message"]["content"], f"Groq ({g_model})"
-                else:
-                    err_log.append(f"{g_model}:{res.status_code}")
-            except Exception:
-                continue
-        raise Exception(f"Akun Groq menolak membaca gambar ({', '.join(err_log[:3])}). Gunakan API Key Google Gemini Anda!")
-
     model_tersedia = []
     try:
         list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
@@ -226,8 +186,8 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa):
 
     raise Exception(f"Server Google sedang sibuk ({', '.join(detail_err)}). Tunggu 30 detik lalu klik Proses lagi.")
 
-st.title("📝 Aplikasi Koreksi Ujian AI (Skor Essay Fleksibel Semua Kelas 🎯)")
-st.caption("SMPN 4 Tamban - Koreksi Otomatis PG & Essay Multi-Struktur")
+st.title("📝 Aplikasi Koreksi Ujian AI (Blind PG & Anti-Bias 🎯)")
+st.caption("SMPN 4 Tamban - Koreksi Otomatis PG Objektif & Essay Multi-Struktur")
 st.markdown("---")
 
 if "acuan_guru_img" not in st.session_state:
@@ -246,6 +206,17 @@ with st.sidebar:
     saved_api = load_key()
     api_key = st.text_input("Masukkan API Key (Google Gemini):", value=saved_api, type="password")
     
+    st.markdown("---")
+    st.subheader("🔍 Aturan Ketegasan PG")
+    mode_ketegasan_pg = st.radio(
+        "Perlakuan Coretan / Tanda PG Tidak Tepat:",
+        [
+            "Ketat (Coretan kotor, silang meleset/tengah-tengah, atau ganda = SALAH)",
+            "Toleran (Tetap tebak 1 huruf yang paling bersih jika ada coretan)"
+        ],
+        index=0
+    )
+
     st.markdown("---")
     st.subheader("📊 Bobot Nilai Tetap")
     bobot_pg = st.number_input("Total Poin Maksimal PG:", min_value=0, max_value=100, value=60)
@@ -272,16 +243,12 @@ with st.sidebar:
     else:
         default_struk = st.session_state.struktur_essay_str
 
-    input_struktur = st.text_input(
-        "Daftar Nomor/Anak Soal Essay:",
-        value=default_struk,
-        help="Ketik nomor essay dipisah koma. Contoh Kelas 7: '1a, 1b, 2a, 2b' | Kelas 8: '1a, 1b, 2' | Kelas 9: '1a, 1b, 2a, 2b, 2c, 3'. Bisa juga memberi poin khusus seperti: '1a=5, 1b=5, 2=30'."
-    )
+    input_struktur = st.text_input("Daftar Nomor/Anak Soal Essay:", value=default_struk)
     st.session_state.struktur_essay_str = input_struktur
     
     peta_poin_essay = hitung_skema_poin_essay(input_struktur, bobot_essay)
     rincian_skema = ", ".join([f"**No.{k}** = `{v}` poin" for k, v in peta_poin_essay.items()])
-    st.info(f"⚖️ **Pembagian Poin Essay Otomatis (Total {bobot_essay} Poin):**\n\n{rincian_skema}")
+    st.info(f"⚖️ **Pembagian Poin Essay (Total {bobot_essay} Poin):**\n\n{rincian_skema}")
 
 tab1, tab2, tab3 = st.tabs([
     "1️⃣ Acuan Guru", 
@@ -292,12 +259,12 @@ tab1, tab2, tab3 = st.tabs([
 # TAB 1: ACUAN GURU
 with tab1:
     st.subheader("📸 1. Upload / Ketik Acuan Penilaian (PG & Essay Jadi Satu)")
-    st.info("💡 Saat Anda mengetik Kunci Essay (misal `1a.`, `1b.`, `2.`) lalu klik **Simpan Acuan Guru**, sistem otomatis mengenali bentuk soal dan membagi bobot 40 poin secara proporsional!")
+    st.info("💡 **Sistem Blind PG Aktif:** Kunci PG yang Anda ketik di sini disembunyikan dari AI saat AI membaca lembar jawaban siswa, sehingga AI tidak bisa lagi 'berprasangka baik' membenarkan jawaban siswa yang meragukan/banyak coretan!")
     
     input_acuan_teks = st.text_area(
         "✍️ Ketik / Copy-Paste Kunci PG & Soal/Jawaban Essay di Sini:", 
         value=st.session_state.acuan_guru_teks,
-        placeholder="Contoh Kelas 8:\nKUNCI PG:\n1.B 2.B 3.D 4.B 5.A 6.A 7.C 8.A 9.B 10.C 11.C 12.B 13.C 14.A 15.A\n\nKUNCI ESSAY:\n1a. 12 + 25 - 10 = 27\n1b. 2 x 3 : 6 = 1\n2. 24 / 2 = 12",
+        placeholder="Contoh:\nKUNCI PG:\n1.B 2.B 3.D 4.B 5.A 6.A 7.C 8.A 9.B 10.C 11.C 12.B 13.C 14.A 15.A\n\nKUNCI ESSAY:\n1a. 12 + 25 - 10 = 27\n1b. 2 x 3 : 6 = 1\n2a. 24 / 2 = 12\n2b. 1/3 + 2/3 = 3/3 = 1",
         height=180
     )
 
@@ -316,7 +283,6 @@ with tab1:
 
     if st.button("💾 Simpan Acuan Guru", type="primary", use_container_width=True):
         st.session_state.acuan_guru_teks = input_acuan_teks
-        # Otomatis deteksi struktur nomor essay dari teks yang diketik guru
         terdeteksi = deteksi_struktur_essay_dari_teks(input_acuan_teks)
         if terdeteksi:
             st.session_state.struktur_essay_str = terdeteksi
@@ -325,7 +291,7 @@ with tab1:
         kunci_cek = parse_kunci_pg(input_acuan_teks)
         info_pg = f"Terdeteksi **{len(kunci_cek)} soal PG** (1 soal = **{round(bobot_pg / len(kunci_cek), 2)} poin**)." if len(kunci_cek) > 0 else ""
         info_es = ", ".join([f"No.{k}={v}p" for k, v in peta_poin_essay.items()])
-        st.success(f"✅ Acuan disimpan! {info_pg} Struktur Essay: **{info_es}** (Total Maks: {bobot_essay} poin).")
+        st.success(f"✅ Acuan disimpan! {info_pg} Struktur Essay: **{info_es}**.")
 
 # TAB 2: JAWABAN SISWA
 with tab2:
@@ -347,7 +313,7 @@ with tab2:
         raw_img = Image.open(file_siswa)
         rotasi = st.radio("Putar Foto Siswa (Pastikan Tegak Lurus):", [0, 90, 180, 270], horizontal=True, key="rot_siswa")
         
-        img_siswa, b64_siswa = prepare_image_and_b64(raw_img, rotasi=rotasi, max_size=850)
+        img_siswa, b64_siswa = prepare_image_and_b64(raw_img, rotasi=rotasi, max_size=950)
         st.image(img_siswa, caption="Preview Lembar Jawaban Siswa", use_container_width=True)
         
         if st.button("🎯 Proses Koreksi Sekarang", type="primary", use_container_width=True):
@@ -359,48 +325,61 @@ with tab2:
                 st.error("⚠️ Mohon ketik atau foto acuan guru di Tab 1 terlebih dahulu!")
             else:
                 waktu_mulai = time.time()
-                with st.spinner("⚡ Mengoreksi jawaban PG & Essay sesuai struktur soal..."):
+                with st.spinner("🔍 Membaca lembar siswa secara objektif (Blind PG OCR)..."):
                     try:
+                        kunci_manual_dict = parse_kunci_pg(teks_acuan_final)
+                        acuan_essay_saja = ambil_acuan_essay_saja(teks_acuan_final)
                         daftar_kode_essay = list(peta_poin_essay.keys())
                         contoh_json_essay = [{"no": k, "jwb": "tulisan siswa", "status": "BENAR"} for k in daftar_kode_essay]
                         
-                        prompt_text = f"""Koreksi lembar jawaban siswa ini dengan sangat teliti.
-                        ACUAN GURU:
-                        {teks_acuan_final}
+                        if mode_ketegasan_pg.startswith("Ketat"):
+                            aturan_pg_prompt = """ATURAN KETAT MEMBACA PILIHAN GANDA (PG) - DILARANG MENEBAK!:
+                            1. Siswa bisa menjawab dengan membulati hitam (●), melingkari (O), atau menyilang (X).
+                            2. LIHAT TITIK TENGAH TANDA: Huruf yang sah HANYA huruf yang tepat berada di titik pusat/tengah silang atau bulatan.
+                            3. ATURAN DISKUALIFIKASI (ISI DENGAN "RAGU"):
+                               - Jika pada satu nomor terdapat BANYAK CORETAN KOTOR atau lebih dari 1 huruf yang disilang/dibulati tanpa kejelasan 100% mana yang dibatalkan, WAJIB tulis "RAGU" (JANGAN memilih salah satu huruf!).
+                               - Jika tanda silang terlalu besar atau meleset di garis batas antara dua huruf sehingga tidak tepat di atas satu huruf, WAJIB tulis "RAGU".
+                               - Hanya tuliskan huruf "A", "B", "C", atau "D" jika tandanya JELAS dan TIDAK MERAGUKAN."""
+                        else:
+                            aturan_pg_prompt = """ATURAN TOLERAN MEMBACA PILIHAN GANDA (PG):
+                            1. Baca huruf yang disilang (X), dibulati hitam (●), atau dilingkari (O) pada tiap nomor.
+                            2. Jika ada tanda yang dicoret tebal/garis datar (=) dan ada tanda lain yang bersih di baris yang sama, ambil huruf yang BERSIH. Jika keduanya sama-sama kotor/ganda tanpa pembatalan, tulis "GANDA"."""
+
+                        # Jika Kunci PG sudah diketik di teks, jangan kirim kunci PG ke AI (Blind Grading agar AI 100% jujur!)
+                        teks_acuan_untuk_ai = acuan_essay_saja if len(kunci_manual_dict) > 0 else teks_acuan_final
+
+                        prompt_text = f"""Anda adalah mesin pembaca optik (OCR) ujian yang sangat objektif dan tanpa kompromi.
                         
-                        ATURAN PG:
-                        - Jika ada tanda silang (X) yang dicoret tebal/garis datar dan ada tanda silang (X) bersih di baris yang sama, ambil yang BERSIH.
+                        {aturan_pg_prompt}
+                        
+                        ACUAN ESSAY GURU:
+                        {teks_acuan_untuk_ai}
                         
                         ATURAN ESSAY:
                         Periksa jawaban essay siswa untuk daftar nomor berikut: {', '.join(daftar_kode_essay)}.
-                        1. BENAR:
-                           - Jawaban yang nilainya SETARA secara matematis dengan kunci adalah BENAR! Contoh: untuk `1/3 + 2/3`, baik siswa menjawab `3/3`, menjawab `1`, maupun `3/3 = 1`, semuanya BENAR!
-                           - Menjawab hasil akhir yang benar TANPA langkah pengerjaan atau dengan cara berbeda tetap BENAR!
-                           - Jawaban teori dengan kalimat berbeda tapi maknanya sesuai soal adalah BENAR!
-                        2. SALAH:
-                           - Jika hasil akhirnya SALAH secara matematis (tidak setara dengan kunci), wajib beri status "SALAH"! Jangan membenarkan hasil yang salah!
+                        1. BENAR: Jawaban yang nilainya SETARA secara matematis dengan kunci (contoh: `3/3` dan `1` sama-sama BENAR), atau hasil akhir benar walau tanpa langkah pengerjaan, atau kalimat teori semakna.
+                        2. SALAH: Jika hasil akhirnya SALAH secara matematis (tidak setara dengan kunci), wajib beri status "SALAH"!
                         
-                        Kembalikan HANYA format JSON berikut (pastikan semua nomor essay {', '.join(daftar_kode_essay)} ada di dalam list "essay"):
+                        Kembalikan HANYA format JSON berikut:
                         {{
                             "nama_terbaca": "Nama Siswa",
-                            "jawaban_pg_siswa": {{"1": "B", "2": "B"}},
-                            "kunci_pg_guru": {{"1": "B", "2": "B"}},
+                            "jawaban_pg_siswa": {{"1": "B", "2": "RAGU", "3": "D"}},
+                            "kunci_pg_guru": {{"1": "B"}},
                             "essay": {json.dumps(contoh_json_essay)}
                         }}"""
 
                         res_text, model_terpakai = panggil_ai_stabil(
                             api_key.strip(), 
                             prompt_text, 
-                            st.session_state.acuan_guru_b64, 
+                            st.session_state.acuan_guru_b64 if len(kunci_manual_dict) == 0 else None, 
                             b64_siswa
                         )
                         
                         hasil_json = ekstrak_json_aman(res_text)
                         
-                        # 1. HITUNG POIN PG
+                        # 1. HITUNG POIN PG SECARA MURNI DI PYTHON
                         jawaban_siswa_dict = {str(k): str(v).upper().strip() for k, v in hasil_json.get("jawaban_pg_siswa", {}).items()}
                         kunci_ai_dict = {str(k): str(v).upper().strip() for k, v in hasil_json.get("kunci_pg_guru", {}).items()}
-                        kunci_manual_dict = parse_kunci_pg(teks_acuan_final)
                         
                         kunci_final_dict = kunci_manual_dict if len(kunci_manual_dict) > 0 else kunci_ai_dict
                         
@@ -417,23 +396,22 @@ with tab2:
                                     benar_pg += 1
                                     detail_per_nomor.append(f"{no}:{jwb_s}(✅)")
                                 else:
-                                    nomor_salah.append(f"No.{no} (Dijawab {jwb_s}, Kunci {kunci_benar})")
+                                    nomor_salah.append(f"No.{no} (Terbaca: {jwb_s}, Kunci: {kunci_benar})")
                                     detail_per_nomor.append(f"{no}:{jwb_s}[Kunci:{kunci_benar}](❌)")
                             
                             poin_pg = round(benar_pg * poin_per_soal_pg, 2)
-                            info_salah = f"Salah di: {', '.join(nomor_salah)}" if nomor_salah else "Benar Semua!"
+                            info_salah = f"Salah/Ragu di: {', '.join(nomor_salah)}" if nomor_salah else "Benar Semua!"
                             rincian_pg_teks = f"Benar {benar_pg} dari {total_soal_pg} soal x {round(poin_per_soal_pg, 2)} poin = {poin_pg} poin ({info_salah})"
                         else:
                             poin_pg = 0.0
                             rincian_pg_teks = "Tidak ada kunci PG"
                             detail_per_nomor = []
 
-                        # 2. HITUNG POIN ESSAY SESUAI BOBOT MASING-MASING NOMOR/ANAK SOAL
+                        # 2. HITUNG POIN ESSAY SESUAI STRUKTUR
                         list_essay = hasil_json.get("essay", [])
                         poin_essay = 0.0
                         rincian_butir_list = []
                         
-                        # Buat peta hasil dari AI dengan normalisasi nama nomor (misal '1.a' -> '1a')
                         hasil_ai_map = {}
                         for item in list_essay:
                             kode_norm = re.sub(r'[^0-9a-z]', '', str(item.get("no", "")).lower())
@@ -452,7 +430,6 @@ with tab2:
                             poin_essay += p_e
                             rincian_butir_list.append(f"No.{kode_soal} (Dijawab: {jwb_e}) -> {ikon_e} {stat_e} [{p_e} / {bobot_butir} poin]")
 
-                        # Jika semua benar, bulatkan pas ke bobot_essay (misal 39.99 -> 40)
                         if abs(poin_essay - bobot_essay) < 0.15:
                             poin_essay = float(bobot_essay)
                         else:
