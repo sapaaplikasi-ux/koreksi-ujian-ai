@@ -11,10 +11,11 @@ import requests
 import gc
 import hashlib
 
+# Sidebar dimatikan sepenuhnya karena sudah pindah ke Tab 4 (Pengaturan)
 st.set_page_config(
     page_title="Smart Koreksi AI - Pro Edition", 
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # ==========================================
@@ -144,10 +145,14 @@ def hitung_skema_poin_essay(struktur_str, total_bobot_essay):
     return peta_poin
 
 # ==========================================
-# 📌 INISIALISASI MEMORI & VARIABEL
+# 📌 INISIALISASI MEMORI & PARAMETER URL
 # ==========================================
-nama_url = st.query_params.get("u", "")
-lisensi_url = st.query_params.get("k", "")
+try:
+    nama_url = st.query_params.get("u", "")
+    lisensi_url = st.query_params.get("k", "")
+except Exception:
+    nama_url = ""
+    lisensi_url = ""
 
 if "lisensi_aktif" not in st.session_state:
     st.session_state.lisensi_aktif = False
@@ -180,7 +185,7 @@ if not st.session_state.lisensi_aktif and nama_url and lisensi_url:
 # ==========================================
 if not st.session_state.lisensi_aktif:
     st.title("🔒 Aktivasi Lisensi Aplikasi Koreksi AI")
-    st.info("💡 **Cara Masuk Cepat untuk Pemilik:** Ketik **`admin`** pada Nama Pengguna dan ketik **`admin12345`** pada Kode Lisensi, lalu klik tombol merah di bawah.")
+    st.info("💡 **Cara Masuk Cepat untuk Pemilik:** Ketik **`admin`** pada Nama Pengguna dan ketik **`admin12345`** pada Kode Lisensi, lalu klik tombol di bawah.")
     
     input_user = st.text_input("👤 Nama Pengguna / Instansi:", value=nama_url if nama_url else "admin")
     input_kode = st.text_input("🔑 Kode Lisensi (Serial Key):", value=lisensi_url, type="password", placeholder="Ketik admin12345 (atau Kode PRO-XXXXXX)")
@@ -189,8 +194,11 @@ if not st.session_state.lisensi_aktif:
         if cek_validitas_lisensi(input_user, input_kode):
             st.session_state.lisensi_aktif = True
             st.session_state.user_aktif = input_user.strip()
-            st.query_params["u"] = re.sub(r'[^a-z0-9]', '', input_user.lower())
-            st.query_params["k"] = input_kode.strip()
+            try:
+                st.query_params["u"] = re.sub(r'[^a-z0-9]', '', input_user.lower())
+                st.query_params["k"] = input_kode.strip()
+            except Exception:
+                pass
             st.rerun()
         else:
             st.error("❌ Nama Pengguna atau Kode Lisensi TIDAK VALID!")
@@ -323,50 +331,78 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa):
     raise Exception(f"Koneksi sedang padat ({', '.join(detail_err[:3])}). Pastikan API Key Anda benar atau tunggu 20 detik lalu coba lagi.")
 
 # ==========================================
-# 📱 LAYAR UTAMA (DENGAN PANEL PENGATURAN TERBUKA DI ATAS)
+# 📱 LAYAR UTAMA: 4 MENU TAB TANPA SIDEBAR!
 # ==========================================
 st.title("📝 Smart Koreksi Ujian AI - Pro Edition")
-st.caption(f"🟢 Lisensi Aktif: **{st.session_state.user_aktif.upper()}**")
+st.caption(f"🟢 Lisensi Terdaftar: **{st.session_state.user_aktif.upper()}** | Atur API Key & Bobot Nilai di menu **4️⃣ Pengaturan**")
 
-# PANEL PENGATURAN UTAMA YANG LANGSUNG TERBUKA DI ATAS LAYAR HP
-with st.container(border=True):
-    st.subheader("⚙️ Panel Pengaturan & API Key")
+# Nama tab dibuat ringkas agar ke-4 menu langsung terlihat semua di layar HP!
+tab1, tab2, tab3, tab4 = st.tabs([
+    "1️⃣ Acuan", 
+    "2️⃣ Siswa", 
+    "3️⃣ Rekap",
+    "4️⃣ Pengaturan"
+])
+
+# TAB 4: MENU PENGATURAN LENGKAP (PENGGANTI SIDEBAR)
+with tab4:
+    st.subheader("⚙️ Pengaturan Sistem & API Key")
     
     saved_key_guru = ambil_key_guru(st.session_state.user_aktif)
-    api_key_input = st.text_input("🔑 Masukkan API Key Google AI Studio:", value=saved_key_guru, type="password", key="api_key_main")
+    api_key_input = st.text_input(
+        "🔑 Masukkan API Key Google AI Studio:", 
+        value=saved_key_guru, 
+        type="password",
+        help="Dapatkan gratis di: aistudio.google.com/apikey"
+    )
     if st.button("💾 Simpan API Key Saya", type="primary", use_container_width=True):
         simpan_key_guru(st.session_state.user_aktif, api_key_input)
         st.success("✅ API Key berhasil disimpan!")
-        st.rerun()
 
-    c_b1, c_b2 = st.columns(2)
-    with c_b1:
-        st.session_state.bobot_pg_val = st.number_input("Total Poin Maksimal PG:", min_value=0, max_value=100, value=st.session_state.bobot_pg_val, key="b_pg_main")
-    with c_b2:
-        st.session_state.bobot_essay_val = st.number_input("Total Poin Maksimal Essay:", min_value=0, max_value=100, value=st.session_state.bobot_essay_val, key="b_es_main")
+    st.markdown("---")
+    st.subheader("📊 Bobot Nilai & Struktur Essay")
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+        st.session_state.bobot_pg_val = st.number_input("Total Poin Maksimal PG:", min_value=0, max_value=100, value=st.session_state.bobot_pg_val)
+    with col_p2:
+        st.session_state.bobot_essay_val = st.number_input("Total Poin Maksimal Essay:", min_value=0, max_value=100, value=st.session_state.bobot_essay_val)
 
-    pilih_kls_main = st.selectbox(
+    pilih_kls = st.selectbox(
         "Pilih Cepat Struktur Essay:",
         [
             "Custom (Sesuai Kotak di Bawah)",
             "Kelas 7 (2 Soal: 1a, 1b, 2a, 2b)",
             "Kelas 8 (2 Soal: 1a, 1b, 2)",
             "Kelas 9 (3 Soal: 1a, 1b, 2a, 2b, 2c, 3)"
-        ],
-        key="kls_main"
+        ]
     )
-    if pilih_kls_main == "Kelas 7 (2 Soal: 1a, 1b, 2a, 2b)":
+    if pilih_kls == "Kelas 7 (2 Soal: 1a, 1b, 2a, 2b)":
         st.session_state.struktur_essay_str = "1a, 1b, 2a, 2b"
-    elif pilih_kls_main == "Kelas 8 (2 Soal: 1a, 1b, 2)":
+    elif pilih_kls == "Kelas 8 (2 Soal: 1a, 1b, 2)":
         st.session_state.struktur_essay_str = "1a, 1b, 2"
-    elif pilih_kls_main == "Kelas 9 (3 Soal: 1a, 1b, 2a, 2b, 2c, 3)":
+    elif pilih_kls == "Kelas 9 (3 Soal: 1a, 1b, 2a, 2b, 2c, 3)":
         st.session_state.struktur_essay_str = "1a, 1b, 2a, 2b, 2c, 3"
 
-    st.session_state.struktur_essay_str = st.text_input("Daftar Nomor/Anak Soal Essay:", value=st.session_state.struktur_essay_str, key="str_main")
-    
-    if st.button("🚪 Keluar / Ganti Lisensi", use_container_width=True):
+    st.session_state.struktur_essay_str = st.text_input("Daftar Nomor/Anak Soal Essay:", value=st.session_state.struktur_essay_str)
+
+    st.markdown("---")
+    st.subheader("🔍 Aturan Ketegasan Pilihan Ganda (PG)")
+    st.session_state.mode_pg_val = st.radio(
+        "Perlakuan Coretan / Silang Tidak Tepat:",
+        [
+            "Ketat (Coretan kotor, silang meleset/tengah-tengah, atau ganda = SALAH)",
+            "Toleran (Tetap tebak 1 huruf yang paling bersih jika ada coretan)"
+        ],
+        index=0 if st.session_state.mode_pg_val.startswith("Ketat") else 1
+    )
+
+    st.markdown("---")
+    if st.button("🚪 Keluar / Ganti Lisensi Pengguna", use_container_width=True):
         st.session_state.lisensi_aktif = False
-        st.query_params.clear()
+        try:
+            st.query_params.clear()
+        except Exception:
+            pass
         st.rerun()
 
 bobot_pg = st.session_state.bobot_pg_val
@@ -375,18 +411,10 @@ peta_poin_essay = hitung_skema_poin_essay(st.session_state.struktur_essay_str, b
 rincian_skema = ", ".join([f"**No.{k}** = `{v}` poin" for k, v in peta_poin_essay.items()])
 api_key_aktif = api_key_input.strip() if api_key_input.strip() else ambil_key_guru(st.session_state.user_aktif)
 
-st.markdown("---")
-
-tab1, tab2, tab3 = st.tabs([
-    "1️⃣ Acuan Guru", 
-    "2️⃣ Foto Siswa", 
-    "3️⃣ Rekap Nilai"
-])
-
 # TAB 1: ACUAN GURU
 with tab1:
-    st.subheader("📸 1. Upload / Ketik Acuan Penilaian (PG & Essay Jadi Satu)")
-    st.info(f"⚖️ **Skema Essay Saat Ini (Total {bobot_essay} Poin):** {rincian_skema}")
+    st.subheader("📸 1. Upload / Ketik Acuan Penilaian (PG & Essay)")
+    st.info(f"⚖️ **Skema Essay Aktif (Total {bobot_essay} Poin):** {rincian_skema} *(Ubah di menu **4️⃣ Pengaturan**)*")
     
     input_acuan_teks = st.text_area(
         "✍️ Ketik / Copy-Paste Kunci PG & Soal/Jawaban Essay di Sini:", 
@@ -447,9 +475,9 @@ with tab2:
             teks_acuan_final = input_acuan_teks if input_acuan_teks else st.session_state.acuan_guru_teks
 
             if not api_key_aktif:
-                st.error("⚠️ Masukkan API Key Google AI Studio Anda terlebih dahulu pada Panel Pengaturan di atas!")
+                st.error("⚠️ Masukkan API Key Anda terlebih dahulu di menu 4️⃣ Pengaturan!")
             elif not st.session_state.acuan_guru_b64 and not teks_acuan_final:
-                st.error("⚠️ Mohon ketik atau foto acuan guru di Tab 1 terlebih dahulu!")
+                st.error("⚠️ Mohon ketik atau foto acuan guru di menu 1️⃣ Acuan terlebih dahulu!")
             else:
                 simpan_key_guru(st.session_state.user_aktif, api_key_aktif)
                 waktu_mulai = time.time()
@@ -460,13 +488,18 @@ with tab2:
                         daftar_kode_essay = list(peta_poin_essay.keys())
                         contoh_json_essay = [{"no": k, "jwb": "tulisan siswa", "status": "BENAR"} for k in daftar_kode_essay]
                         
-                        aturan_pg_prompt = """ATURAN KETAT MEMBACA PILIHAN GANDA (PG) - DILARANG MENEBAK!:
-                        1. Siswa bisa menjawab dengan membulati hitam (●), melingkari (O), atau menyilang (X).
-                        2. LIHAT TITIK TENGAH TANDA: Huruf yang sah HANYA huruf yang tepat berada di titik pusat/tengah silang atau bulatan.
-                        3. ATURAN DISKUALIFIKASI (ISI DENGAN "RAGU"):
-                           - Jika pada satu nomor terdapat BANYAK CORETAN KOTOR atau lebih dari 1 huruf yang disilang/dibulati tanpa kejelasan 100% mana yang dibatalkan, WAJIB tulis "RAGU" (JANGAN memilih salah satu huruf!).
-                           - Jika tanda silang terlalu besar atau meleset di garis batas antara dua huruf sehingga tidak tepat di atas satu huruf, WAJIB tulis "RAGU".
-                           - Hanya tuliskan huruf "A", "B", "C", atau "D" jika tandanya JELAS dan TIDAK MERAGUKAN."""
+                        if st.session_state.mode_pg_val.startswith("Ketat"):
+                            aturan_pg_prompt = """ATURAN KETAT MEMBACA PILIHAN GANDA (PG) - DILARANG MENEBAK!:
+                            1. Siswa bisa menjawab dengan membulati hitam (●), melingkari (O), atau menyilang (X).
+                            2. LIHAT TITIK TENGAH TANDA: Huruf yang sah HANYA huruf yang tepat berada di titik pusat/tengah silang atau bulatan.
+                            3. ATURAN DISKUALIFIKASI (ISI DENGAN "RAGU"):
+                               - Jika pada satu nomor terdapat BANYAK CORETAN KOTOR atau lebih dari 1 huruf yang disilang/dibulati tanpa kejelasan 100% mana yang dibatalkan, WAJIB tulis "RAGU" (JANGAN memilih salah satu huruf!).
+                               - Jika tanda silang terlalu besar atau meleset di garis batas antara dua huruf sehingga tidak tepat di atas satu huruf, WAJIB tulis "RAGU".
+                               - Hanya tuliskan huruf "A", "B", "C", atau "D" jika tandanya JELAS dan TIDAK MERAGUKAN."""
+                        else:
+                            aturan_pg_prompt = """ATURAN TOLERAN MEMBACA PILIHAN GANDA (PG):
+                            1. Baca huruf yang disilang (X), dibulati hitam (●), atau dilingkari (O) pada tiap nomor.
+                            2. Jika ada tanda yang dicoret tebal/garis datar (=) dan ada tanda lain yang bersih di baris yang sama, ambil huruf yang BERSIH. Jika keduanya sama-sama kotor/ganda tanpa pembatalan, tulis "GANDA"."""
 
                         teks_acuan_untuk_ai = acuan_essay_saja if len(kunci_manual_dict) > 0 else teks_acuan_final
 
