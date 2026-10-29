@@ -11,11 +11,9 @@ import requests
 import gc
 import hashlib
 
-# Sidebar dimatikan sepenuhnya karena sudah pindah ke Tab 4 (Pengaturan)
 st.set_page_config(
     page_title="Smart Koreksi AI - Pro Edition", 
-    layout="wide",
-    initial_sidebar_state="collapsed"
+    layout="wide"
 )
 
 # ==========================================
@@ -24,7 +22,7 @@ st.set_page_config(
 def get_master_secret():
     try:
         if "MASTER_SECRET" in st.secrets:
-            return st.secrets["MASTER_SECRET"].strip()
+            return str(st.secrets["MASTER_SECRET"]).strip()
     except Exception:
         pass
     return "RAHASIA-SUPER-AMAN-2026"
@@ -32,13 +30,13 @@ def get_master_secret():
 def get_admin_password():
     try:
         if "ADMIN_PASSWORD" in st.secrets:
-            return st.secrets["ADMIN_PASSWORD"].strip()
+            return str(st.secrets["ADMIN_PASSWORD"]).strip()
     except Exception:
         pass
     return "admin12345"
 
 def buat_kode_lisensi(nama_user):
-    id_bersih = re.sub(r'[^a-z0-9]', '', nama_user.lower())
+    id_bersih = re.sub(r'[^a-z0-9]', '', str(nama_user).lower())
     rahasia = get_master_secret()
     gabungan = f"{id_bersih}:{rahasia}"
     hash_hex = hashlib.sha256(gabungan.encode()).hexdigest().upper()
@@ -47,10 +45,10 @@ def buat_kode_lisensi(nama_user):
 def cek_validitas_lisensi(nama_user, kode_input):
     if not nama_user or not kode_input:
         return False
-    if nama_user.strip().lower() == "admin" and kode_input.strip() == get_admin_password():
+    if str(nama_user).strip().lower() == "admin" and str(kode_input).strip() == get_admin_password():
         return True
     kode_seharusnya = buat_kode_lisensi(nama_user)
-    return kode_input.strip().upper() == kode_seharusnya
+    return str(kode_input).strip().upper() == kode_seharusnya
 
 DB_GURU_FILE = "db_apikey_guru.json"
 
@@ -67,8 +65,8 @@ def simpan_key_guru(nama_guru, api_key):
     if not nama_guru or not api_key:
         return
     db = muat_db_guru()
-    id_guru = re.sub(r'[^a-z0-9]', '', nama_guru.lower())
-    db[id_guru] = api_key.strip()
+    id_guru = re.sub(r'[^a-z0-9]', '', str(nama_guru).lower())
+    db[id_guru] = str(api_key).strip()
     try:
         with open(DB_GURU_FILE, "w") as f:
             json.dump(db, f)
@@ -76,26 +74,20 @@ def simpan_key_guru(nama_guru, api_key):
         pass
 
 def ambil_key_guru(nama_guru):
-    if not nama_guru:
-        try:
-            if "GEMINI_API_KEY" in st.secrets:
-                return st.secrets["GEMINI_API_KEY"].strip()
-        except Exception:
-            pass
-        return ""
-    id_guru = re.sub(r'[^a-z0-9]', '', nama_guru.lower())
-    db = muat_db_guru()
-    if id_guru in db:
-        return db[id_guru]
+    if nama_guru:
+        id_guru = re.sub(r'[^a-z0-9]', '', str(nama_guru).lower())
+        db = muat_db_guru()
+        if id_guru in db and db[id_guru]:
+            return db[id_guru]
     try:
         if "GEMINI_API_KEY" in st.secrets:
-            return st.secrets["GEMINI_API_KEY"].strip()
+            return str(st.secrets["GEMINI_API_KEY"]).strip()
     except Exception:
         pass
     return ""
 
 def hitung_skema_poin_essay(struktur_str, total_bobot_essay):
-    items = [x.strip() for x in re.split(r'[,\n]+', struktur_str) if x.strip()]
+    items = [x.strip() for x in re.split(r'[,\n]+', str(struktur_str)) if x.strip()]
     if not items:
         return {"1": float(total_bobot_essay)}
     
@@ -145,15 +137,8 @@ def hitung_skema_poin_essay(struktur_str, total_bobot_essay):
     return peta_poin
 
 # ==========================================
-# 📌 INISIALISASI MEMORI & PARAMETER URL
+# 📌 INISIALISASI MEMORI AMAN (TANPA QUERY_PARAMS)
 # ==========================================
-try:
-    nama_url = st.query_params.get("u", "")
-    lisensi_url = st.query_params.get("k", "")
-except Exception:
-    nama_url = ""
-    lisensi_url = ""
-
 if "lisensi_aktif" not in st.session_state:
     st.session_state.lisensi_aktif = False
 if "user_aktif" not in st.session_state:
@@ -175,11 +160,6 @@ if "mode_pg_val" not in st.session_state:
 if "data_nilai" not in st.session_state:
     st.session_state.data_nilai = []
 
-if not st.session_state.lisensi_aktif and nama_url and lisensi_url:
-    if cek_validitas_lisensi(nama_url, lisensi_url):
-        st.session_state.lisensi_aktif = True
-        st.session_state.user_aktif = nama_url
-
 # ==========================================
 # 🚪 HALAMAN LOGIN LISENSI (JIKA BELUM LOGIN)
 # ==========================================
@@ -187,18 +167,13 @@ if not st.session_state.lisensi_aktif:
     st.title("🔒 Aktivasi Lisensi Aplikasi Koreksi AI")
     st.info("💡 **Cara Masuk Cepat untuk Pemilik:** Ketik **`admin`** pada Nama Pengguna dan ketik **`admin12345`** pada Kode Lisensi, lalu klik tombol di bawah.")
     
-    input_user = st.text_input("👤 Nama Pengguna / Instansi:", value=nama_url if nama_url else "admin")
-    input_kode = st.text_input("🔑 Kode Lisensi (Serial Key):", value=lisensi_url, type="password", placeholder="Ketik admin12345 (atau Kode PRO-XXXXXX)")
+    input_user = st.text_input("👤 Nama Pengguna / Instansi:", value="admin")
+    input_kode = st.text_input("🔑 Kode Lisensi (Serial Key):", type="password", placeholder="Ketik admin12345 (atau Kode PRO-XXXXXX)")
     
-    if st.button("🔓 Masuk & Buka Aplikasi", type="primary", use_container_width=True):
+    if st.button("🔓 Masuk & Buka Aplikasi", type="primary"):
         if cek_validitas_lisensi(input_user, input_kode):
             st.session_state.lisensi_aktif = True
             st.session_state.user_aktif = input_user.strip()
-            try:
-                st.query_params["u"] = re.sub(r'[^a-z0-9]', '', input_user.lower())
-                st.query_params["k"] = input_kode.strip()
-            except Exception:
-                pass
             st.rerun()
         else:
             st.error("❌ Nama Pengguna atau Kode Lisensi TIDAK VALID!")
@@ -237,20 +212,20 @@ def prepare_image_and_b64(img, rotasi=0, max_size=950):
     return Image.open(buf), b64_str
 
 def parse_kunci_pg(teks):
-    bagian_pg = re.split(r'(?:ESSAY|ESAI|URAIAN)', teks, flags=re.IGNORECASE)[0]
+    bagian_pg = re.split(r'(?:ESSAY|ESAI|URAIAN)', str(teks), flags=re.IGNORECASE)[0]
     pairs = re.findall(r'\b(\d+)\s*[\.\:\-\)]\s*([A-Ea-e])\b', bagian_pg)
     return {str(num): ans.upper() for num, ans in pairs}
 
 def ambil_acuan_essay_saja(teks):
-    match = re.search(r'(?:ESSAY|ESAI|URAIAN).*', teks, re.IGNORECASE | re.DOTALL)
+    match = re.search(r'(?:ESSAY|ESAI|URAIAN).*', str(teks), re.IGNORECASE | re.DOTALL)
     if match:
         return match.group(0)
-    tanpa_pg = re.sub(r'\b\d+\s*[\.\:\-\)]\s*[A-Ea-e]\b', '', teks)
+    tanpa_pg = re.sub(r'\b\d+\s*[\.\:\-\)]\s*[A-Ea-e]\b', '', str(teks))
     return tanpa_pg.strip()
 
 def deteksi_struktur_essay_dari_teks(teks):
-    bagian_essay = teks
-    match_bagian = re.search(r'(?:ESSAY|ESAI|URAIAN).*', teks, re.IGNORECASE | re.DOTALL)
+    bagian_essay = str(teks)
+    match_bagian = re.search(r'(?:ESSAY|ESAI|URAIAN).*', bagian_essay, re.IGNORECASE | re.DOTALL)
     if match_bagian:
         bagian_essay = match_bagian.group(0)
     
@@ -271,7 +246,7 @@ def deteksi_struktur_essay_dari_teks(teks):
     return ", ".join(ditemukan)
 
 def ekstrak_json_aman(teks):
-    teks_bersih = re.sub(r"```json|```", "", teks).strip()
+    teks_bersih = re.sub(r"```json|```", "", str(teks)).strip()
     match = re.search(r'\{.*\}', teks_bersih, re.DOTALL)
     if match:
         return json.loads(match.group(0))
@@ -334,9 +309,8 @@ def panggil_ai_stabil(api_key, prompt_text, b64_acuan, b64_siswa):
 # 📱 LAYAR UTAMA: 4 MENU TAB TANPA SIDEBAR!
 # ==========================================
 st.title("📝 Smart Koreksi Ujian AI - Pro Edition")
-st.caption(f"🟢 Lisensi Terdaftar: **{st.session_state.user_aktif.upper()}** | Atur API Key & Bobot Nilai di menu **4️⃣ Pengaturan**")
+st.caption(f"🟢 Lisensi Aktif: **{st.session_state.user_aktif.upper()}** | Atur API Key, Bobot & Kelas di menu **4️⃣ Pengaturan**")
 
-# Nama tab dibuat ringkas agar ke-4 menu langsung terlihat semua di layar HP!
 tab1, tab2, tab3, tab4 = st.tabs([
     "1️⃣ Acuan", 
     "2️⃣ Siswa", 
@@ -355,7 +329,7 @@ with tab4:
         type="password",
         help="Dapatkan gratis di: aistudio.google.com/apikey"
     )
-    if st.button("💾 Simpan API Key Saya", type="primary", use_container_width=True):
+    if st.button("💾 Simpan API Key Saya", type="primary"):
         simpan_key_guru(st.session_state.user_aktif, api_key_input)
         st.success("✅ API Key berhasil disimpan!")
 
@@ -363,9 +337,9 @@ with tab4:
     st.subheader("📊 Bobot Nilai & Struktur Essay")
     col_p1, col_p2 = st.columns(2)
     with col_p1:
-        st.session_state.bobot_pg_val = st.number_input("Total Poin Maksimal PG:", min_value=0, max_value=100, value=st.session_state.bobot_pg_val)
+        st.session_state.bobot_pg_val = st.number_input("Total Poin Maksimal PG:", min_value=0, max_value=100, value=int(st.session_state.bobot_pg_val))
     with col_p2:
-        st.session_state.bobot_essay_val = st.number_input("Total Poin Maksimal Essay:", min_value=0, max_value=100, value=st.session_state.bobot_essay_val)
+        st.session_state.bobot_essay_val = st.number_input("Total Poin Maksimal Essay:", min_value=0, max_value=100, value=int(st.session_state.bobot_essay_val))
 
     pilih_kls = st.selectbox(
         "Pilih Cepat Struktur Essay:",
@@ -397,12 +371,8 @@ with tab4:
     )
 
     st.markdown("---")
-    if st.button("🚪 Keluar / Ganti Lisensi Pengguna", use_container_width=True):
+    if st.button("🚪 Keluar / Ganti Lisensi Pengguna"):
         st.session_state.lisensi_aktif = False
-        try:
-            st.query_params.clear()
-        except Exception:
-            pass
         st.rerun()
 
 bobot_pg = st.session_state.bobot_pg_val
@@ -434,9 +404,9 @@ with tab1:
         img_ac, b64_ac = prepare_image_and_b64(Image.open(foto_acuan), rotasi=rotasi_acuan)
         st.session_state.acuan_guru_img = img_ac
         st.session_state.acuan_guru_b64 = b64_ac
-        st.image(img_ac, caption="Foto Acuan Guru", use_container_width=True)
+        st.image(img_ac, caption="Foto Acuan Guru")
 
-    if st.button("💾 Simpan Acuan Guru", type="primary", use_container_width=True):
+    if st.button("💾 Simpan Acuan Guru", type="primary"):
         st.session_state.acuan_guru_teks = input_acuan_teks
         terdeteksi = deteksi_struktur_essay_dari_teks(input_acuan_teks)
         if terdeteksi:
@@ -469,9 +439,9 @@ with tab2:
         rotasi = st.radio("Putar Foto Siswa (Pastikan Tegak Lurus):", [0, 90, 180, 270], horizontal=True, key="rot_siswa")
         
         img_siswa, b64_siswa = prepare_image_and_b64(raw_img, rotasi=rotasi, max_size=950)
-        st.image(img_siswa, caption="Preview Lembar Jawaban Siswa", use_container_width=True)
+        st.image(img_siswa, caption="Preview Lembar Jawaban Siswa")
         
-        if st.button("🎯 Proses Koreksi Sekarang", type="primary", use_container_width=True):
+        if st.button("🎯 Proses Koreksi Sekarang", type="primary"):
             teks_acuan_final = input_acuan_teks if input_acuan_teks else st.session_state.acuan_guru_teks
 
             if not api_key_aktif:
@@ -628,19 +598,19 @@ with tab3:
     else:
         st.session_state.data_nilai = [row for row in st.session_state.data_nilai if row.get("Nama Siswa") is not None]
         df = pd.DataFrame(st.session_state.data_nilai)
-        edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        edited_df = st.data_editor(df, num_rows="dynamic")
         st.session_state.data_nilai = edited_df.to_dict('records')
 
         col_a, col_b, col_c = st.columns(3)
         with col_a:
-            if st.button("✅ Setujui Semua Nilai", type="primary", use_container_width=True):
+            if st.button("✅ Setujui Semua Nilai", type="primary"):
                 for item in st.session_state.data_nilai:
                     item["Status"] = "✅ Disetujui Guru (Final)"
                 st.rerun()
         with col_b:
             csv = edited_df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Excel/CSV", data=csv, file_name="Rekap_Nilai_Ujian.csv", mime="text/csv", use_container_width=True)
+            st.download_button("📥 Download Excel/CSV", data=csv, file_name="Rekap_Nilai_Ujian.csv", mime="text/csv")
         with col_c:
-            if st.button("🗑️ Kosongkan Tabel", use_container_width=True):
+            if st.button("🗑️ Kosongkan Tabel"):
                 st.session_state.data_nilai = []
                 st.rerun()
